@@ -24,7 +24,17 @@ func main() {
 		logger.Fatal("Failed to load config", err)
 	}
 
+	// mcp-termux exposes a shell; running it without authentication would give
+	// anything on localhost (other apps, adb, etc.) full shell access. Refuse
+	// to start unless an API key is configured.
+	apiKey := config.ResolveAPIKey("termux")
+	if apiKey == "" {
+		logger.Log.Error("mcp-termux requires DROIDMCP_TERMUX_KEY or DROIDMCP_API_KEY to be set. Refusing to start.")
+		os.Exit(1)
+	}
+
 	server := core.NewDroidServer("mcp-termux", "1.0.0")
+	server.APIKey = apiKey
 	registerTools(server)
 
 	if err := server.ServeSSE(cfg.Port); err != nil {

@@ -26,6 +26,7 @@ func main() {
 	}
 
 	server := core.NewDroidServer("mcp-network", "1.0.0")
+	server.APIKey = config.ResolveAPIKey("network")
 	registerTools(server)
 
 	if err := server.ServeSSE(cfg.Port); err != nil {

@@ -3,6 +3,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -29,4 +30,16 @@ func LoadConfig() (*Config, error) {
 		Port: viper.GetInt("PORT"),
 		Root: viper.GetString("ROOT"),
 	}, nil
+}
+
+// ResolveAPIKey returns the API key the named server should enforce on inbound
+// requests. It checks the per-server variable DROIDMCP_<NAME>_KEY first, then
+// falls back to the global DROIDMCP_API_KEY. An empty result means no auth is
+// configured (dev mode); callers that require a key must enforce that themselves.
+func ResolveAPIKey(serverName string) string {
+	specific := "DROIDMCP_" + strings.ToUpper(serverName) + "_KEY"
+	if k := os.Getenv(specific); k != "" {
+		return k
+	}
+	return os.Getenv("DROIDMCP_API_KEY")
 }

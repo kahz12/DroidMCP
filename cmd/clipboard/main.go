@@ -23,6 +23,7 @@ func main() {
 	}
 
 	server := core.NewDroidServer("mcp-clipboard", "1.0.0")
+	server.APIKey = config.ResolveAPIKey("clipboard")
 	registerTools(server)
 
 	if err := server.ServeSSE(cfg.Port); err != nil {

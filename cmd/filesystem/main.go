@@ -26,6 +26,7 @@ func main() {
 	}
 
 	server := core.NewDroidServer("mcp-filesystem", "1.0.0")
+	server.APIKey = config.ResolveAPIKey("filesystem")
 	registerTools(server)
 
 	if err := server.ServeSSE(cfg.Port); err != nil {

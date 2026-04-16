@@ -42,6 +42,7 @@ func main() {
 	ghClient = github.NewClient(tc)
 
 	server := core.NewDroidServer("mcp-github", "1.0.0")
+	server.APIKey = config.ResolveAPIKey("github")
 	registerTools(server)
 
 	if err := server.ServeSSE(cfg.Port); err != nil {
