@@ -17,9 +17,9 @@ Claude Code / Gemini CLI / Any MCP Client
               v
        DroidMCP Server        <-- runs in Termux (Android)
               |
-    +---------+---------+----------+---------+
-    |         |         |          |         |
- filesystem github   scraper   termux   network
+    +---------+---------+----------+---------+-----------+
+    |         |         |          |         |           |
+ filesystem github   scraper   termux   network   clipboard
 ```
 
 ## Servers
@@ -83,6 +83,16 @@ Local network discovery and port scanning using concurrent TCP probes.
 | `scan_network` | Scan a subnet for active hosts (auto-detects local subnet) |
 | `check_ports` | Scan common ports on a specific host |
 
+### mcp-clipboard
+
+Clipboard management between Android and AI agents via Termux API.
+
+| Tool | Description |
+|------|-------------|
+| `get_clipboard` | Read current clipboard content |
+| `set_clipboard` | Write text to clipboard |
+| `clipboard_history` | Retrieve clipboard history (not natively supported by Termux API) |
+
 ---
 
 ## Installation
@@ -114,6 +124,7 @@ bin/
   droidmcp-scraper
   droidmcp-termux
   droidmcp-network
+  droidmcp-clipboard
 ```
 
 ### Install to PATH (optional)
@@ -187,6 +198,13 @@ export DROIDMCP_PORT=3004
 droidmcp-network
 ```
 
+### Clipboard
+
+```bash
+export DROIDMCP_PORT=3005
+droidmcp-clipboard
+```
+
 ---
 
 ## Client Integration
@@ -235,7 +253,8 @@ DroidMCP/
 │   ├── github/           # GitHub API MCP
 │   ├── scraper/          # Web scraping MCP
 │   ├── termux/           # Shell & package management MCP
-│   └── network/          # Network scanning MCP
+│   ├── network/          # Network scanning MCP
+│   └── clipboard/        # Clipboard management MCP
 ├── internal/
 │   ├── core/server.go    # Shared MCP server wrapper (HTTP/SSE)
 │   ├── logger/logger.go  # Structured logging (stderr)
@@ -270,6 +289,7 @@ DroidMCP/
 - **Filesystem**: All paths are validated against a configurable root. Absolute paths and directory traversal attempts (`../`) are rejected.
 - **Termux**: Provides full shell access. Use with caution and only with trusted MCP clients.
 - **Network**: Runs on localhost only. Never expose server ports to external networks.
+- **Clipboard**: Accesses Android clipboard via Termux API. Input is passed through stdin, not shell arguments.
 - **GitHub**: Permissions are scoped to whatever the provided `GITHUB_TOKEN` allows.
 
 ---
