@@ -224,18 +224,25 @@ DroidMCP/
 
 ---
 
-## Future MCP Ideas
-
-### PHASE 7 — mcp-clipboard
+## PHASE 7 — mcp-clipboard [DONE]
 > **Goal:** Clipboard management between Android and AI agents
 
+### MCP Tools
 | Tool                | Description                                  |
 |---------------------|----------------------------------------------|
 | `get_clipboard`     | Read current clipboard content               |
 | `set_clipboard`     | Write text to clipboard                      |
 | `clipboard_history` | Retrieve clipboard history (if available)    |
 
+### Tasks
+- [x] Integrate `termux-clipboard-get` and `termux-clipboard-set`
+- [x] Handle text input/output via standard streams
+- [x] Implementation of `clipboard_history` (stub as not supported by API)
+- [x] Integration into build pipeline (Makefile/scripts)
+
 ---
+
+## Future MCP Ideas
 
 ### PHASE 8 — mcp-notifications
 > **Goal:** Send and read Android notifications from AI agents
