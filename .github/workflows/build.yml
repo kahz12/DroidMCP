@@ -1,0 +1,52 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build ARM64 Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [filesystem, github, scraper, termux, network]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Build binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o droidmcp-${{ matrix.service }} ./cmd/${{ matrix.service }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: droidmcp-${{ matrix.service }}
+          path: droidmcp-${{ matrix.service }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            droidmcp-filesystem/droidmcp-filesystem
+            droidmcp-github/droidmcp-github
+            droidmcp-scraper/droidmcp-scraper
+            droidmcp-termux/droidmcp-termux
+            droidmcp-network/droidmcp-network
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

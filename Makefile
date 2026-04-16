@@ -3,6 +3,10 @@
 build:
 	@echo "Building binaries..."
 	@go build -o bin/droidmcp-filesystem ./cmd/filesystem
+	@go build -o bin/droidmcp-github ./cmd/github
+	@go build -o bin/droidmcp-scraper ./cmd/scraper
+	@go build -o bin/droidmcp-termux ./cmd/termux
+	@go build -o bin/droidmcp-network ./cmd/network
 
 build-arm64:
 	@chmod +x scripts/build-arm64.sh

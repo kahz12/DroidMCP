@@ -4,7 +4,7 @@ set -e
 mkdir -p bin
 
 # List of services to build
-SERVICES=("filesystem")
+SERVICES=("filesystem" "github" "scraper" "termux" "network")
 
 for service in "${SERVICES[@]}"; do
     echo "Building $service for ARM64..."
