@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [filesystem, github, scraper, termux, network]
+        service: [filesystem, github, scraper, termux, network, clipboard]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -50,5 +50,6 @@ jobs:
             droidmcp-scraper/droidmcp-scraper
             droidmcp-termux/droidmcp-termux
             droidmcp-network/droidmcp-network
+            droidmcp-clipboard/droidmcp-clipboard
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

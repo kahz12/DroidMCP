@@ -63,7 +63,10 @@ func handleGetClipboard(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 }
 
 func handleSetClipboard(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	text, _ := req.RequireString("text")
+	text, err := req.RequireString("text")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 
 	cmd := exec.CommandContext(ctx, "termux-clipboard-set")
 	cmd.Stdin = strings.NewReader(text)

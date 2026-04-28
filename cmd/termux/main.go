@@ -74,7 +74,10 @@ func registerTools(s *core.DroidServer) {
 }
 
 func handleRunCommand(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	command, _ := req.RequireString("command")
+	command, err := req.RequireString("command")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	argsStr := req.GetString("args", "")
 	// Basic argument splitting. More complex commands might require a real shell lexer.
 	args := strings.Fields(argsStr)
@@ -89,7 +92,10 @@ func handleRunCommand(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 }
 
 func handleInstallPkg(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	pkgName, _ := req.RequireString("package")
+	pkgName, err := req.RequireString("package")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 
 	// Use -y flag to ensure non-interactive installation.
 	cmd := exec.CommandContext(ctx, "pkg", "install", "-y", pkgName)

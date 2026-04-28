@@ -143,8 +143,14 @@ func handleListRepos(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 }
 
 func handleGetRepo(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, _ := req.RequireString("owner")
-	repo, _ := req.RequireString("repo")
+	owner, err := req.RequireString("owner")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	repo, err := req.RequireString("repo")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 
 	r, _, err := ghClient.Repositories.Get(ctx, owner, repo)
 	if err != nil {
@@ -157,9 +163,18 @@ func handleGetRepo(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 }
 
 func handleCreateIssue(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, _ := req.RequireString("owner")
-	repo, _ := req.RequireString("repo")
-	title, _ := req.RequireString("title")
+	owner, err := req.RequireString("owner")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	repo, err := req.RequireString("repo")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	title, err := req.RequireString("title")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	body := req.GetString("body", "")
 
 	issueRequest := &github.IssueRequest{
@@ -176,8 +191,14 @@ func handleCreateIssue(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 }
 
 func handleListIssues(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, _ := req.RequireString("owner")
-	repo, _ := req.RequireString("repo")
+	owner, err := req.RequireString("owner")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	repo, err := req.RequireString("repo")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	state := req.GetString("state", "open")
 
 	opts := &github.IssueListByRepoOptions{
@@ -200,9 +221,18 @@ func handleListIssues(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 }
 
 func handleGetFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, _ := req.RequireString("owner")
-	repo, _ := req.RequireString("repo")
-	path, _ := req.RequireString("path")
+	owner, err := req.RequireString("owner")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	repo, err := req.RequireString("repo")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	path, err := req.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	ref := req.GetString("ref", "")
 
 	opts := &github.RepositoryContentGetOptions{
@@ -225,9 +255,18 @@ func handleGetFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 }
 
 func handleGetPR(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, _ := req.RequireString("owner")
-	repo, _ := req.RequireString("repo")
-	number, _ := req.RequireInt("number")
+	owner, err := req.RequireString("owner")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	repo, err := req.RequireString("repo")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	number, err := req.RequireInt("number")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 
 	pr, _, err := ghClient.PullRequests.Get(ctx, owner, repo, number)
 	if err != nil {
@@ -240,11 +279,26 @@ func handleGetPR(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolRes
 }
 
 func handleCreatePR(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, _ := req.RequireString("owner")
-	repo, _ := req.RequireString("repo")
-	title, _ := req.RequireString("title")
-	head, _ := req.RequireString("head")
-	base, _ := req.RequireString("base")
+	owner, err := req.RequireString("owner")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	repo, err := req.RequireString("repo")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	title, err := req.RequireString("title")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	head, err := req.RequireString("head")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	base, err := req.RequireString("base")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	body := req.GetString("body", "")
 
 	newPR := &github.NewPullRequest{
@@ -263,11 +317,26 @@ func handleCreatePR(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 }
 
 func handleCommitFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, _ := req.RequireString("owner")
-	repo, _ := req.RequireString("repo")
-	path, _ := req.RequireString("path")
-	content, _ := req.RequireString("content")
-	message, _ := req.RequireString("message")
+	owner, err := req.RequireString("owner")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	repo, err := req.RequireString("repo")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	path, err := req.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	content, err := req.RequireString("content")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	message, err := req.RequireString("message")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	branch := req.GetString("branch", "")
 
 	// Check if file exists to get SHA. SHA is MANDATORY for updating existing files.

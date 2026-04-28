@@ -113,7 +113,10 @@ func securePath(relPath string) (string, error) {
 // 4. Return ToolResult.
 
 func handleReadFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	path, _ := req.RequireString("path")
+	path, err := req.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	fullPath, err := securePath(path)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -128,8 +131,14 @@ func handleReadFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 }
 
 func handleWriteFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	path, _ := req.RequireString("path")
-	content, _ := req.RequireString("content")
+	path, err := req.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	content, err := req.RequireString("content")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	fullPath, err := securePath(path)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -147,7 +156,10 @@ func handleWriteFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 }
 
 func handleListDirectory(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	path, _ := req.RequireString("path")
+	path, err := req.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	fullPath, err := securePath(path)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -177,7 +189,10 @@ func handleListDirectory(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 
 func handleSearchFiles(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	searchRootRel := req.GetString("root", ".")
-	pattern, _ := req.RequireString("pattern")
+	pattern, err := req.RequireString("pattern")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 
 	searchRoot, err := securePath(searchRootRel)
 	if err != nil {
@@ -209,7 +224,10 @@ func handleSearchFiles(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 }
 
 func handleDeleteFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	path, _ := req.RequireString("path")
+	path, err := req.RequireString("path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	fullPath, err := securePath(path)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -223,8 +241,14 @@ func handleDeleteFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 }
 
 func handleMoveFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	src, _ := req.RequireString("source")
-	dst, _ := req.RequireString("destination")
+	src, err := req.RequireString("source")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	dst, err := req.RequireString("destination")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 
 	fullSrc, err := securePath(src)
 	if err != nil {

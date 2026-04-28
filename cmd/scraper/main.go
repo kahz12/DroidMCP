@@ -66,7 +66,10 @@ func registerTools(s *core.DroidServer) {
 }
 
 func handleFetchPage(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	url, _ := req.RequireString("url")
+	url, err := req.RequireString("url")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	c := colly.NewCollector()
 	var html string
 
@@ -74,7 +77,7 @@ func handleFetchPage(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 		html = string(r.Body)
 	})
 
-	err := c.Visit(url)
+	err = c.Visit(url)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -83,13 +86,16 @@ func handleFetchPage(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 }
 
 func handleExtractText(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	url, _ := req.RequireString("url")
+	url, err := req.RequireString("url")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	c := colly.NewCollector()
 	var text string
 
 	c.OnResponse(func(r *colly.Response) {
-		doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(r.Body)))
-		if err == nil {
+		doc, derr := goquery.NewDocumentFromReader(strings.NewReader(string(r.Body)))
+		if derr == nil {
 			// DOM manipulation to remove noise before extracting text.
 			doc.Find("script, style, iframe, noscript").Remove()
 			text = strings.TrimSpace(doc.Text())
@@ -98,7 +104,7 @@ func handleExtractText(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 		}
 	})
 
-	err := c.Visit(url)
+	err = c.Visit(url)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -107,7 +113,10 @@ func handleExtractText(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 }
 
 func handleExtractLinks(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	url, _ := req.RequireString("url")
+	url, err := req.RequireString("url")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	c := colly.NewCollector()
 	var links []string
 
@@ -116,7 +125,7 @@ func handleExtractLinks(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 		links = append(links, e.Request.AbsoluteURL(e.Attr("href")))
 	})
 
-	err := c.Visit(url)
+	err = c.Visit(url)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -125,14 +134,17 @@ func handleExtractLinks(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 }
 
 func handleExtractTable(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	url, _ := req.RequireString("url")
+	url, err := req.RequireString("url")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	selector := req.GetString("selector", "table")
 	c := colly.NewCollector()
 	var tables [][]map[string]string
 
 	c.OnResponse(func(r *colly.Response) {
-		doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(r.Body)))
-		if err != nil {
+		doc, derr := goquery.NewDocumentFromReader(strings.NewReader(string(r.Body)))
+		if derr != nil {
 			return
 		}
 
@@ -167,7 +179,7 @@ func handleExtractTable(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 		})
 	})
 
-	err := c.Visit(url)
+	err = c.Visit(url)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
