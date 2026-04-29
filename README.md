@@ -1,5 +1,6 @@
 # DroidMCP
 
+[![SafeSkill 50/100](https://img.shields.io/badge/SafeSkill-50%2F100_Use%20with%20Caution-orange)](https://safeskill.dev/scan/kahz12-droidmcp)
 Native MCP (Model Context Protocol) servers for Android/Termux. High-performance ARM64 binaries written in Go with zero external runtime dependencies.
 
 No Node.js. No Python. Just a single binary that works.
