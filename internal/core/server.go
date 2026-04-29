@@ -3,12 +3,27 @@
 package core
 
 import (
+	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"net/http"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/kahz12/droidmcp/internal/logger"
 	"github.com/mark3labs/mcp-go/server"
+)
+
+// HTTP timeouts. WriteTimeout is intentionally left at 0 because SSE streams
+// are long-lived and we do not want to interrupt them. ReadHeaderTimeout and
+// IdleTimeout still protect the /message endpoint against slowloris-style
+// abuse.
+const (
+	readHeaderTimeout = 10 * time.Second
+	idleTimeout       = 120 * time.Second
+	shutdownGrace     = 10 * time.Second
 )
 
 // authHeader is the request header every DroidMCP client must set when a
@@ -45,8 +60,10 @@ func (s *DroidServer) ServeSSE(port int) error {
 	handler := authMiddleware(s.APIKey, sseServer)
 
 	httpSrv := &http.Server{
-		Addr:    addr,
-		Handler: handler,
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleTimeout,
 	}
 
 	if s.APIKey == "" {
@@ -56,7 +73,32 @@ func (s *DroidServer) ServeSSE(port int) error {
 		logger.Info("Starting MCP SSE Server",
 			"addr", addr, "url", baseURL+"/sse", "auth", "enabled")
 	}
-	return httpSrv.ListenAndServe()
+
+	// Wait for SIGINT/SIGTERM in a separate goroutine and trigger a graceful
+	// shutdown so in-flight handlers can finish (within shutdownGrace).
+	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- httpSrv.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serveErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-signalCtx.Done():
+		logger.Info("Shutdown signal received, draining connections", "grace", shutdownGrace)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+		defer cancel()
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("graceful shutdown failed: %w", err)
+		}
+		return nil
+	}
 }
 
 // authMiddleware enforces that every inbound request carries a valid

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/gocolly/colly/v2"
@@ -15,6 +16,21 @@ import (
 	"github.com/kahz12/droidmcp/internal/logger"
 	"github.com/mark3labs/mcp-go/mcp"
 )
+
+// Resource limits for outbound scrapes. Prevent a slow or unbounded server
+// from hanging a goroutine forever or filling memory with a huge response.
+const (
+	scraperRequestTimeout = 20 * time.Second
+	scraperMaxBodyBytes   = 10 * 1024 * 1024 // 10 MiB
+)
+
+// newCollector returns a colly collector with the project-wide timeout and
+// body-size limits applied.
+func newCollector() *colly.Collector {
+	c := colly.NewCollector(colly.MaxBodySize(scraperMaxBodyBytes))
+	c.SetRequestTimeout(scraperRequestTimeout)
+	return c
+}
 
 var cfg *config.Config
 
@@ -70,7 +86,7 @@ func handleFetchPage(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	c := colly.NewCollector()
+	c := newCollector()
 	var html string
 
 	c.OnResponse(func(r *colly.Response) {
@@ -90,7 +106,7 @@ func handleExtractText(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	c := colly.NewCollector()
+	c := newCollector()
 	var text string
 
 	c.OnResponse(func(r *colly.Response) {
@@ -117,7 +133,7 @@ func handleExtractLinks(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	c := colly.NewCollector()
+	c := newCollector()
 	var links []string
 
 	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
@@ -139,7 +155,7 @@ func handleExtractTable(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	selector := req.GetString("selector", "table")
-	c := colly.NewCollector()
+	c := newCollector()
 	var tables [][]map[string]string
 
 	c.OnResponse(func(r *colly.Response) {

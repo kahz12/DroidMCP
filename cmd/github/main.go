@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/google/go-github/v60/github"
 	"github.com/kahz12/droidmcp/internal/config"
@@ -144,11 +145,11 @@ func handleListRepos(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	var result string
+	var result strings.Builder
 	for _, r := range repos {
-		result += fmt.Sprintf("- %s: %s\n", r.GetFullName(), r.GetDescription())
+		fmt.Fprintf(&result, "- %s: %s\n", r.GetFullName(), r.GetDescription())
 	}
-	return mcp.NewToolResultText(result), nil
+	return mcp.NewToolResultText(result.String()), nil
 }
 
 // paginationOpts reads optional per_page/page parameters and returns a
@@ -229,14 +230,15 @@ func handleListIssues(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	var result string
+	if len(issues) == 0 {
+		return mcp.NewToolResultText("No issues found."), nil
+	}
+
+	var result strings.Builder
 	for _, i := range issues {
-		result += fmt.Sprintf("#%d: %s (%s)\n", i.GetNumber(), i.GetTitle(), i.GetState())
+		fmt.Fprintf(&result, "#%d: %s (%s)\n", i.GetNumber(), i.GetTitle(), i.GetState())
 	}
-	if result == "" {
-		result = "No issues found."
-	}
-	return mcp.NewToolResultText(result), nil
+	return mcp.NewToolResultText(result.String()), nil
 }
 
 func handleGetFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

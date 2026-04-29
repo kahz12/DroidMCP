@@ -15,20 +15,24 @@ type Config struct {
 	Root string // Root directory for filesystem operations
 }
 
-// LoadConfig initializes Viper and loads configuration from environment variables.
-// All variables are prefixed with DROIDMCP_ (e.g., DROIDMCP_PORT).
+// LoadConfig initializes a fresh Viper instance and loads configuration from
+// environment variables. All variables are prefixed with DROIDMCP_ (e.g.,
+// DROIDMCP_PORT). Using viper.New() instead of the package-global keeps state
+// isolated per process and per test, so concurrent tests cannot trample each
+// other's defaults.
 func LoadConfig() (*Config, error) {
-	viper.SetDefault("PORT", 3000)
-	viper.SetDefault("ROOT", "/")
+	v := viper.New()
+	v.SetDefault("PORT", 3000)
+	v.SetDefault("ROOT", "/")
 
-	viper.SetEnvPrefix("DROIDMCP")
+	v.SetEnvPrefix("DROIDMCP")
 	// Replace dots with underscores in env keys to support nested structs if needed.
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	viper.AutomaticEnv()
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
 
 	return &Config{
-		Port: viper.GetInt("PORT"),
-		Root: viper.GetString("ROOT"),
+		Port: v.GetInt("PORT"),
+		Root: v.GetString("ROOT"),
 	}, nil
 }
 
