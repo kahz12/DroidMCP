@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 
 	"github.com/google/go-github/v60/github"
@@ -54,6 +56,8 @@ func registerTools(s *core.DroidServer) {
 	// list_repos: Returns a list of repositories accessible by the token.
 	listReposTool := mcp.NewTool("list_repos",
 		mcp.WithDescription("List repositories for the authenticated user"),
+		mcp.WithNumber("per_page", mcp.Description("Results per page (max 100, default 30)")),
+		mcp.WithNumber("page", mcp.Description("Page number to retrieve (default 1)")),
 	)
 	s.MCPServer.AddTool(listReposTool, handleListRepos)
 
@@ -81,6 +85,8 @@ func registerTools(s *core.DroidServer) {
 		mcp.WithString("owner", mcp.Required(), mcp.Description("Owner of the repository")),
 		mcp.WithString("repo", mcp.Required(), mcp.Description("Name of the repository")),
 		mcp.WithString("state", mcp.Description("State of issues to list (open, closed, all). Default: open")),
+		mcp.WithNumber("per_page", mcp.Description("Results per page (max 100, default 30)")),
+		mcp.WithNumber("page", mcp.Description("Page number to retrieve (default 1)")),
 	)
 	s.MCPServer.AddTool(listIssuesTool, handleListIssues)
 
@@ -130,7 +136,10 @@ func registerTools(s *core.DroidServer) {
 }
 
 func handleListRepos(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	repos, _, err := ghClient.Repositories.List(ctx, "", nil)
+	opts := &github.RepositoryListOptions{
+		ListOptions: paginationOpts(req),
+	}
+	repos, _, err := ghClient.Repositories.List(ctx, "", opts)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -140,6 +149,15 @@ func handleListRepos(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 		result += fmt.Sprintf("- %s: %s\n", r.GetFullName(), r.GetDescription())
 	}
 	return mcp.NewToolResultText(result), nil
+}
+
+// paginationOpts reads optional per_page/page parameters and returns a
+// github.ListOptions ready to embed in any List* call.
+func paginationOpts(req mcp.CallToolRequest) github.ListOptions {
+	return github.ListOptions{
+		Page:    req.GetInt("page", 0),
+		PerPage: req.GetInt("per_page", 0),
+	}
 }
 
 func handleGetRepo(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -202,7 +220,8 @@ func handleListIssues(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	state := req.GetString("state", "open")
 
 	opts := &github.IssueListByRepoOptions{
-		State: state,
+		State:       state,
+		ListOptions: paginationOpts(req),
 	}
 
 	issues, _, err := ghClient.Issues.ListByRepo(ctx, owner, repo, opts)
@@ -340,11 +359,23 @@ func handleCommitFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	branch := req.GetString("branch", "")
 
 	// Check if file exists to get SHA. SHA is MANDATORY for updating existing files.
+	// We must distinguish between "file does not exist" (404 -> create) and other
+	// errors (5xx, auth, network -> bail out instead of attempting a create that
+	// would fail with a misleading "sha is required" message).
 	getOpts := &github.RepositoryContentGetOptions{Ref: branch}
-	fileContent, _, _, err := ghClient.Repositories.GetContents(ctx, owner, repo, path, getOpts)
+	fileContent, dirContent, _, err := ghClient.Repositories.GetContents(ctx, owner, repo, path, getOpts)
 
 	var sha *string
-	if err == nil && fileContent != nil {
+	if err != nil {
+		var errResp *github.ErrorResponse
+		if !errors.As(err, &errResp) || errResp.Response == nil || errResp.Response.StatusCode != http.StatusNotFound {
+			return mcp.NewToolResultError(fmt.Sprintf("Error checking existing file: %v", err)), nil
+		}
+		// 404: the file does not exist yet, leave sha nil so a new file is created.
+	} else if dirContent != nil {
+		// GetContents returned a directory listing instead of a single file.
+		return mcp.NewToolResultError(fmt.Sprintf("Path %q is a directory, not a file", path)), nil
+	} else if fileContent != nil {
 		sha = fileContent.SHA
 	}
 

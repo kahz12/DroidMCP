@@ -48,7 +48,10 @@ func registerTools(s *core.DroidServer) {
 	runCmdTool := mcp.NewTool("run_command",
 		mcp.WithDescription("Execute a command in Termux shell"),
 		mcp.WithString("command", mcp.Required(), mcp.Description("The command to execute")),
-		mcp.WithString("args", mcp.Description("Space-separated arguments for the command")),
+		mcp.WithArray("args",
+			mcp.WithStringItems(),
+			mcp.Description("Arguments for the command, one element per argument (preserves spaces in individual args)"),
+		),
 	)
 	s.MCPServer.AddTool(runCmdTool, handleRunCommand)
 
@@ -78,9 +81,9 @@ func handleRunCommand(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	argsStr := req.GetString("args", "")
-	// Basic argument splitting. More complex commands might require a real shell lexer.
-	args := strings.Fields(argsStr)
+	// args is now a string array so callers can pass arguments containing spaces
+	// or shell metacharacters without ambiguous splitting.
+	args := req.GetStringSlice("args", nil)
 
 	cmd := exec.CommandContext(ctx, command, args...)
 	output, err := cmd.CombinedOutput()

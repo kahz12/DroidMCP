@@ -105,44 +105,89 @@ func handleCheckPorts(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 }
 
 // getLocalSubnet attempts to identify the current IPv4 subnet of the primary interface.
+// It returns the actual CIDR (network address + mask), not a hard-coded /24.
 func getLocalSubnet() string {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return ""
 	}
 	for _, address := range addrs {
-		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				// Assuming a /24 subnet for simplicity in local network discovery.
-				ip := ipnet.IP.To4()
-				return fmt.Sprintf("%d.%d.%d.0/24", ip[0], ip[1], ip[2])
-			}
+		ipnet, ok := address.(*net.IPNet)
+		if !ok || ipnet.IP.IsLoopback() {
+			continue
 		}
+		ip4 := ipnet.IP.To4()
+		if ip4 == nil {
+			continue
+		}
+		ones, bits := ipnet.Mask.Size()
+		if bits != 32 {
+			// Skip non-IPv4 masks (e.g., a 4-in-6 IP without a clean v4 mask).
+			continue
+		}
+		network := ip4.Mask(ipnet.Mask)
+		return fmt.Sprintf("%s/%d", network.String(), ones)
 	}
 	return ""
 }
 
-// scanSubnet performs a basic concurrent scan of a /24 subnet by attempting TCP connections.
+// maxScanHosts caps the number of addresses scanSubnet expands a CIDR into so
+// that very wide subnets (e.g. /8, /16) cannot spawn millions of dials.
+const maxScanHosts = 4096
+
+// scanWorkerLimit bounds concurrent dials to keep file-descriptor and goroutine
+// pressure low on resource-constrained Android/Termux devices.
+const scanWorkerLimit = 128
+
+// scanSubnet performs a concurrent scan of all hosts inside the given CIDR. It
+// honors the supplied mask (no longer hard-coded /24), excludes the network and
+// broadcast addresses for masks that have them, and limits concurrency.
 // Note: This is a loud scan and may be blocked by some firewalls.
 func scanSubnet(subnet string) []string {
 	_, ipnet, err := net.ParseCIDR(subnet)
 	if err != nil {
 		return nil
 	}
+	ip4 := ipnet.IP.To4()
+	if ip4 == nil {
+		return nil // IPv4 only for now
+	}
+	ones, bits := ipnet.Mask.Size()
+	if bits != 32 {
+		return nil
+	}
 
+	hostBits := bits - ones
+	var totalAddresses uint64 = 1 << uint(hostBits)
+	if totalAddresses > maxScanHosts {
+		logger.Info("Subnet too large, capping scan", "cidr", subnet, "limit", maxScanHosts)
+		totalAddresses = maxScanHosts
+	}
+
+	networkInt := ipv4ToUint32(ip4.Mask(ipnet.Mask))
+	// For /31 and /32 every address is a host. For wider masks the first and
+	// last addresses are network/broadcast and are skipped.
+	var startOffset, endOffset uint64 = 0, totalAddresses
+	if hostBits >= 2 {
+		startOffset = 1
+		endOffset = totalAddresses - 1
+	}
+
+	sem := make(chan struct{}, scanWorkerLimit)
 	var wg sync.WaitGroup
 	var activeHosts []string
 	var mu sync.Mutex
 
-	ip := ipnet.IP.To4()
-	for i := 1; i < 255; i++ {
+	portsToTry := []string{"80", "22", "443"}
+	for offset := startOffset; offset < endOffset; offset++ {
+		target := uint32ToIPv4(networkInt + uint32(offset)).String()
 		wg.Add(1)
-		go func(lastByte int) {
+		sem <- struct{}{}
+		go func(target string) {
 			defer wg.Done()
-			target := fmt.Sprintf("%d.%d.%d.%d", ip[0], ip[1], ip[2], lastByte)
-			// We try ports 80 and 22 as heuristics for active hosts.
+			defer func() { <-sem }()
+			// We try ports 80, 22 and 443 as heuristics for active hosts.
 			// In a real scenario, ICMP ping might be better, but it requires root in Termux.
-			portsToTry := []string{"80", "22", "443"}
 			for _, p := range portsToTry {
 				conn, err := net.DialTimeout("tcp", net.JoinHostPort(target, p), 150*time.Millisecond)
 				if err == nil {
@@ -153,8 +198,17 @@ func scanSubnet(subnet string) []string {
 					return
 				}
 			}
-		}(i)
+		}(target)
 	}
 	wg.Wait()
 	return activeHosts
+}
+
+func ipv4ToUint32(ip net.IP) uint32 {
+	ip = ip.To4()
+	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+}
+
+func uint32ToIPv4(n uint32) net.IP {
+	return net.IPv4(byte(n>>24), byte(n>>16), byte(n>>8), byte(n)).To4()
 }

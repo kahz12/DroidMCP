@@ -152,25 +152,42 @@ func handleExtractTable(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 			var table []map[string]string
 			var headers []string
 
-			tableHtml.Find("tr").Each(func(j int, rowHtml *goquery.Selection) {
-				// Detect headers in the first row.
-				if j == 0 {
+			// Prefer headers declared in <thead> (first thead row). Fallback to
+			// first <tr> further below if thead is absent.
+			tableHtml.Find("thead tr").First().Find("th, td").Each(func(_ int, cellHtml *goquery.Selection) {
+				headers = append(headers, strings.TrimSpace(cellHtml.Text()))
+			})
+			hadThead := len(headers) > 0
+
+			// Pick the row source: tbody tr if present, otherwise top-level tr.
+			// When thead supplied headers, exclude any tr nested inside thead so
+			// they are not counted as data rows.
+			rows := tableHtml.Find("tbody tr")
+			if rows.Length() == 0 {
+				rows = tableHtml.Find("tr")
+				if hadThead {
+					rows = rows.NotSelection(tableHtml.Find("thead tr"))
+				}
+			}
+
+			rows.Each(func(j int, rowHtml *goquery.Selection) {
+				// Legacy fallback: no thead at all, treat the first row as header.
+				if !hadThead && j == 0 {
 					rowHtml.Find("th, td").Each(func(k int, cellHtml *goquery.Selection) {
 						headers = append(headers, strings.TrimSpace(cellHtml.Text()))
 					})
-				} else {
-					// Map row data to header keys.
-					rowData := make(map[string]string)
-					rowHtml.Find("td").Each(func(k int, cellHtml *goquery.Selection) {
-						header := fmt.Sprintf("col%d", k)
-						if k < len(headers) {
-							header = headers[k]
-						}
-						rowData[header] = strings.TrimSpace(cellHtml.Text())
-					})
-					if len(rowData) > 0 {
-						table = append(table, rowData)
+					return
+				}
+				rowData := make(map[string]string)
+				rowHtml.Find("td").Each(func(k int, cellHtml *goquery.Selection) {
+					header := fmt.Sprintf("col%d", k)
+					if k < len(headers) {
+						header = headers[k]
 					}
+					rowData[header] = strings.TrimSpace(cellHtml.Text())
+				})
+				if len(rowData) > 0 {
+					table = append(table, rowData)
 				}
 			})
 			if len(table) > 0 {

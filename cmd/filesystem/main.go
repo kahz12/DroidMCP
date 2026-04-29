@@ -199,6 +199,12 @@ func handleSearchFiles(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
+	// Validate the glob pattern once up front so an invalid pattern (e.g. a
+	// stray "[") fails loudly instead of silently returning zero matches.
+	if _, err := filepath.Match(pattern, ""); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid pattern %q: %v", pattern, err)), nil
+	}
+
 	var matches []string
 	err = filepath.WalkDir(searchRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
