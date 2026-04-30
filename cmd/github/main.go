@@ -4,11 +4,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/go-github/v60/github"
 	"github.com/kahz12/droidmcp/internal/config"
@@ -23,6 +25,10 @@ var (
 	ghClient *github.Client
 )
 
+// tokenStartupTimeout caps the Users.Get(ctx, "") health check so a
+// misconfigured network does not block the server from starting forever.
+const tokenStartupTimeout = 10 * time.Second
+
 func main() {
 	var err error
 	cfg, err = config.LoadConfig()
@@ -30,19 +36,24 @@ func main() {
 		logger.Fatal("Failed to load config", err)
 	}
 
-	// GITHUB_TOKEN is required for all operations.
-	token := os.Getenv("GITHUB_TOKEN")
+	token, source := resolveGitHubToken()
 	if token == "" {
-		logger.Fatal("GITHUB_TOKEN environment variable is required", nil)
+		logger.Fatal("No GitHub token found: set GITHUB_TOKEN, GITHUB_APP_TOKEN or GITHUB_FINE_GRAINED_TOKEN", nil)
 	}
 
 	ctx := context.Background()
-	ts := oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: token},
-	)
-	tc := oauth2.NewClient(ctx, ts)
-	// Initialize the GitHub client with authenticated OAuth2 transport.
-	ghClient = github.NewClient(tc)
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	oauthClient := oauth2.NewClient(ctx, ts)
+	// Wrap the OAuth2 transport with our retry layer. The OAuth2 client is the
+	// outermost layer (it adds the Authorization header), so the retry sits
+	// between it and the default transport.
+	oauthClient.Transport = newRetryTransport(oauthClient.Transport)
+
+	ghClient = github.NewClient(oauthClient)
+
+	if err := validateToken(ctx, ghClient, source); err != nil {
+		logger.Fatal("GitHub token validation failed", err, "source", source)
+	}
 
 	server := core.NewDroidServer("mcp-github", "1.0.0")
 	server.APIKey = config.ResolveAPIKey("github")
@@ -53,103 +64,50 @@ func main() {
 	}
 }
 
-func registerTools(s *core.DroidServer) {
-	// list_repos: Returns a list of repositories accessible by the token.
-	listReposTool := mcp.NewTool("list_repos",
-		mcp.WithDescription("List repositories for the authenticated user"),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (max 100, default 30)")),
-		mcp.WithNumber("page", mcp.Description("Page number to retrieve (default 1)")),
-	)
-	s.MCPServer.AddTool(listReposTool, handleListRepos)
-
-	// get_repo: Fetches detailed metadata for a specific repository.
-	getRepoTool := mcp.NewTool("get_repo",
-		mcp.WithDescription("Get detailed information about a repository"),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Owner of the repository")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Name of the repository")),
-	)
-	s.MCPServer.AddTool(getRepoTool, handleGetRepo)
-
-	// create_issue: Basic issue tracking support.
-	createIssueTool := mcp.NewTool("create_issue",
-		mcp.WithDescription("Create a new issue in a repository"),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Owner of the repository")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Name of the repository")),
-		mcp.WithString("title", mcp.Required(), mcp.Description("Title of the issue")),
-		mcp.WithString("body", mcp.Description("Body content of the issue")),
-	)
-	s.MCPServer.AddTool(createIssueTool, handleCreateIssue)
-
-	// list_issues: Filtered issue listing.
-	listIssuesTool := mcp.NewTool("list_issues",
-		mcp.WithDescription("List issues in a repository"),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Owner of the repository")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Name of the repository")),
-		mcp.WithString("state", mcp.Description("State of issues to list (open, closed, all). Default: open")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (max 100, default 30)")),
-		mcp.WithNumber("page", mcp.Description("Page number to retrieve (default 1)")),
-	)
-	s.MCPServer.AddTool(listIssuesTool, handleListIssues)
-
-	// get_file: Retrieves raw file content. Handles Base64 decoding internally.
-	getFileTool := mcp.NewTool("get_file",
-		mcp.WithDescription("Get the contents of a file from a repository"),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Owner of the repository")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Name of the repository")),
-		mcp.WithString("path", mcp.Required(), mcp.Description("Path to the file in the repository")),
-		mcp.WithString("ref", mcp.Description("The name of the commit/branch/tag. Default: the repository’s default branch")),
-	)
-	s.MCPServer.AddTool(getFileTool, handleGetFile)
-
-	// get_pr: Detailed Pull Request inspection.
-	getPRTool := mcp.NewTool("get_pr",
-		mcp.WithDescription("Get detailed information about a pull request"),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Owner of the repository")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Name of the repository")),
-		mcp.WithNumber("number", mcp.Required(), mcp.Description("Pull request number")),
-	)
-	s.MCPServer.AddTool(getPRTool, handleGetPR)
-
-	// create_pr: Simplifies the PR creation workflow.
-	createPRTool := mcp.NewTool("create_pr",
-		mcp.WithDescription("Create a new pull request"),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Owner of the repository")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Name of the repository")),
-		mcp.WithString("title", mcp.Required(), mcp.Description("Title of the pull request")),
-		mcp.WithString("head", mcp.Required(), mcp.Description("The name of the branch where your changes are implemented")),
-		mcp.WithString("base", mcp.Required(), mcp.Description("The name of the branch you want the changes pulled into")),
-		mcp.WithString("body", mcp.Description("Body content of the pull request")),
-	)
-	s.MCPServer.AddTool(createPRTool, handleCreatePR)
-
-	// commit_file: High-level Content API for single-file commits.
-	// This automatically handles SHA management for updates.
-	commitFileTool := mcp.NewTool("commit_file",
-		mcp.WithDescription("Create or update a file in a repository"),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Owner of the repository")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Name of the repository")),
-		mcp.WithString("path", mcp.Required(), mcp.Description("Path to the file in the repository")),
-		mcp.WithString("content", mcp.Required(), mcp.Description("New content of the file")),
-		mcp.WithString("message", mcp.Required(), mcp.Description("Commit message")),
-		mcp.WithString("branch", mcp.Description("The branch name. Default: the repository’s default branch")),
-	)
-	s.MCPServer.AddTool(commitFileTool, handleCommitFile)
+// resolveGitHubToken looks up the token from the supported environment
+// variables in priority order. It returns the value plus the env name it came
+// from (for logging) so the operator can see which credential is in use.
+func resolveGitHubToken() (token, source string) {
+	for _, name := range []string{"GITHUB_TOKEN", "GITHUB_APP_TOKEN", "GITHUB_FINE_GRAINED_TOKEN"} {
+		if v := os.Getenv(name); v != "" {
+			return v, name
+		}
+	}
+	return "", ""
 }
 
-func handleListRepos(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	opts := &github.RepositoryListOptions{
-		ListOptions: paginationOpts(req),
-	}
-	repos, _, err := ghClient.Repositories.List(ctx, "", opts)
+// validateToken probes the GitHub API with the configured credential so we
+// fail fast at startup instead of returning misleading 401s for every tool
+// call. Users.Get(ctx, "") returns the authenticated user.
+func validateToken(parent context.Context, c *github.Client, source string) error {
+	ctx, cancel := context.WithTimeout(parent, tokenStartupTimeout)
+	defer cancel()
+	user, _, err := c.Users.Get(ctx, "")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return err
 	}
+	logger.Info("GitHub token validated", "source", source, "login", user.GetLogin())
+	return nil
+}
 
-	var result strings.Builder
-	for _, r := range repos {
-		fmt.Fprintf(&result, "- %s: %s\n", r.GetFullName(), r.GetDescription())
+func registerTools(s *core.DroidServer) {
+	registerRepoTools(s)
+	registerIssueTools(s)
+	registerPRTools(s)
+	registerFileTools(s)
+	registerSearchTools(s)
+}
+
+// jsonResult marshals v as indented JSON and returns it as a tool result. If
+// marshaling fails (which would indicate a programming error: an unexported
+// field tagged for JSON, a cyclic structure, etc.) we fall back to an error
+// result so the caller sees a useful message instead of an empty payload.
+func jsonResult(v any) (*mcp.CallToolResult, error) {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
 	}
-	return mcp.NewToolResultText(result.String()), nil
+	return mcp.NewToolResultText(string(b)), nil
 }
 
 // paginationOpts reads optional per_page/page parameters and returns a
@@ -161,239 +119,56 @@ func paginationOpts(req mcp.CallToolRequest) github.ListOptions {
 	}
 }
 
-func handleGetRepo(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, err := req.RequireString("owner")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+// githubError converts an error returned from a go-github call into a tool
+// result. Rate-limit and abuse-rate-limit errors are surfaced with the reset
+// time / retry hint so callers (or upstream agents) can back off intelligently
+// instead of guessing.
+func githubError(err error) (*mcp.CallToolResult, error) {
+	if err == nil {
+		return nil, nil
 	}
-	repo, err := req.RequireString("repo")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+	var rl *github.RateLimitError
+	if errors.As(err, &rl) {
+		var b strings.Builder
+		fmt.Fprintf(&b, "GitHub rate limit hit: %s", rl.Message)
+		fmt.Fprintf(&b, " (limit=%d remaining=%d resets=%s)",
+			rl.Rate.Limit, rl.Rate.Remaining, rl.Rate.Reset.Format(time.RFC3339))
+		return mcp.NewToolResultError(b.String()), nil
 	}
-
-	r, _, err := ghClient.Repositories.Get(ctx, owner, repo)
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-
-	res := fmt.Sprintf("Name: %s\nDescription: %s\nStars: %d\nForks: %d\nOpen Issues: %d\nURL: %s",
-		r.GetFullName(), r.GetDescription(), r.GetStargazersCount(), r.GetForksCount(), r.GetOpenIssuesCount(), r.GetHTMLURL())
-	return mcp.NewToolResultText(res), nil
-}
-
-func handleCreateIssue(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, err := req.RequireString("owner")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	repo, err := req.RequireString("repo")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	title, err := req.RequireString("title")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	body := req.GetString("body", "")
-
-	issueRequest := &github.IssueRequest{
-		Title: &title,
-		Body:  &body,
-	}
-
-	issue, _, err := ghClient.Issues.Create(ctx, owner, repo, issueRequest)
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-
-	return mcp.NewToolResultText(fmt.Sprintf("Issue created successfully: %s", issue.GetHTMLURL())), nil
-}
-
-func handleListIssues(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, err := req.RequireString("owner")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	repo, err := req.RequireString("repo")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	state := req.GetString("state", "open")
-
-	opts := &github.IssueListByRepoOptions{
-		State:       state,
-		ListOptions: paginationOpts(req),
-	}
-
-	issues, _, err := ghClient.Issues.ListByRepo(ctx, owner, repo, opts)
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-
-	if len(issues) == 0 {
-		return mcp.NewToolResultText("No issues found."), nil
-	}
-
-	var result strings.Builder
-	for _, i := range issues {
-		fmt.Fprintf(&result, "#%d: %s (%s)\n", i.GetNumber(), i.GetTitle(), i.GetState())
-	}
-	return mcp.NewToolResultText(result.String()), nil
-}
-
-func handleGetFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, err := req.RequireString("owner")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	repo, err := req.RequireString("repo")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	path, err := req.RequireString("path")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	ref := req.GetString("ref", "")
-
-	opts := &github.RepositoryContentGetOptions{
-		Ref: ref,
-	}
-
-	fileContent, _, _, err := ghClient.Repositories.GetContents(ctx, owner, repo, path, opts)
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-
-	// GitHub returns content encoded in Base64 for many files.
-	// GetContent() decodes it automatically.
-	content, err := fileContent.GetContent()
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-
-	return mcp.NewToolResultText(content), nil
-}
-
-func handleGetPR(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, err := req.RequireString("owner")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	repo, err := req.RequireString("repo")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	number, err := req.RequireInt("number")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-
-	pr, _, err := ghClient.PullRequests.Get(ctx, owner, repo, number)
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-
-	res := fmt.Sprintf("PR #%d: %s\nState: %s\nUser: %s\nBody: %s\nURL: %s",
-		pr.GetNumber(), pr.GetTitle(), pr.GetState(), pr.GetUser().GetLogin(), pr.GetBody(), pr.GetHTMLURL())
-	return mcp.NewToolResultText(res), nil
-}
-
-func handleCreatePR(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, err := req.RequireString("owner")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	repo, err := req.RequireString("repo")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	title, err := req.RequireString("title")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	head, err := req.RequireString("head")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	base, err := req.RequireString("base")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	body := req.GetString("body", "")
-
-	newPR := &github.NewPullRequest{
-		Title: &title,
-		Head:  &head,
-		Base:  &base,
-		Body:  &body,
-	}
-
-	pr, _, err := ghClient.PullRequests.Create(ctx, owner, repo, newPR)
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-
-	return mcp.NewToolResultText(fmt.Sprintf("Pull request created successfully: %s", pr.GetHTMLURL())), nil
-}
-
-func handleCommitFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	owner, err := req.RequireString("owner")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	repo, err := req.RequireString("repo")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	path, err := req.RequireString("path")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	content, err := req.RequireString("content")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	message, err := req.RequireString("message")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	branch := req.GetString("branch", "")
-
-	// Check if file exists to get SHA. SHA is MANDATORY for updating existing files.
-	// We must distinguish between "file does not exist" (404 -> create) and other
-	// errors (5xx, auth, network -> bail out instead of attempting a create that
-	// would fail with a misleading "sha is required" message).
-	getOpts := &github.RepositoryContentGetOptions{Ref: branch}
-	fileContent, dirContent, _, err := ghClient.Repositories.GetContents(ctx, owner, repo, path, getOpts)
-
-	var sha *string
-	if err != nil {
-		var errResp *github.ErrorResponse
-		if !errors.As(err, &errResp) || errResp.Response == nil || errResp.Response.StatusCode != http.StatusNotFound {
-			return mcp.NewToolResultError(fmt.Sprintf("Error checking existing file: %v", err)), nil
+	var abuse *github.AbuseRateLimitError
+	if errors.As(err, &abuse) {
+		msg := fmt.Sprintf("GitHub secondary rate limit: %s", abuse.Message)
+		if abuse.RetryAfter != nil {
+			msg += fmt.Sprintf(" (retry after %s)", abuse.RetryAfter.Round(time.Second))
 		}
-		// 404: the file does not exist yet, leave sha nil so a new file is created.
-	} else if dirContent != nil {
-		// GetContents returned a directory listing instead of a single file.
-		return mcp.NewToolResultError(fmt.Sprintf("Path %q is a directory, not a file", path)), nil
-	} else if fileContent != nil {
-		sha = fileContent.SHA
+		return mcp.NewToolResultError(msg), nil
 	}
+	return mcp.NewToolResultError(err.Error()), nil
+}
 
-	opts := &github.RepositoryContentFileOptions{
-		Message: github.String(message),
-		Content: []byte(content),
-		SHA:     sha,
-	}
-	if branch != "" {
-		opts.Branch = github.String(branch)
-	}
+// withRateLimit reads X-RateLimit-* headers off a successful response so the
+// agent can decide whether to keep going. It is purely informational; the
+// retry transport handles the wire-level cases. The shape is exposed in JSON
+// payloads under the "_rate_limit" key.
+type rateInfo struct {
+	Limit     int       `json:"limit"`
+	Remaining int       `json:"remaining"`
+	Reset     time.Time `json:"reset"`
+}
 
-	_, _, err = ghClient.Repositories.CreateFile(ctx, owner, repo, path, opts)
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+func rateOf(resp *github.Response) *rateInfo {
+	if resp == nil {
+		return nil
 	}
+	return &rateInfo{
+		Limit:     resp.Rate.Limit,
+		Remaining: resp.Rate.Remaining,
+		Reset:     resp.Rate.Reset.Time,
+	}
+}
 
-	return mcp.NewToolResultText(fmt.Sprintf("File %s committed successfully", path)), nil
+// notFound returns true if err is an *http.StatusNotFound from GitHub.
+func notFound(err error) bool {
+	var er *github.ErrorResponse
+	return errors.As(err, &er) && er.Response != nil && er.Response.StatusCode == http.StatusNotFound
 }
