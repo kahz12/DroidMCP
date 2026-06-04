@@ -20,3 +20,9 @@ vendor/
 
 # Audit reports
 AUDIT_REPORT.txt
+
+# Serena
+.serena/
+
+# Built binary (root)
+/termux
