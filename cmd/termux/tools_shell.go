@@ -52,6 +52,7 @@ func readEnvTool() ToolSpec {
 func shellTools() []ToolSpec {
 	return []ToolSpec{
 		runCommandTool(),
+		runShellTool(),
 		installPkgTool(),
 		listPkgsTool(),
 		readEnvTool(),

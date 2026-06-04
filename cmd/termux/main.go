@@ -46,7 +46,7 @@ func main() {
 }
 
 func registerTools(s *core.DroidServer) {
-	register(s, slices.Concat(shellTools(), apiTools()))
+	register(s, slices.Concat(shellTools(), jobTools(), apiTools()))
 }
 
 func handleRunCommand(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
