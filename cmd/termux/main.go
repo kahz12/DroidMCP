@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 
@@ -45,76 +46,7 @@ func main() {
 }
 
 func registerTools(s *core.DroidServer) {
-	addTool := func(t mcp.Tool, h func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)) {
-		s.MCPServer.AddTool(t, h)
-	}
-
-	// Generic shell access. Subject to DROIDMCP_TERMUX_ALLOWLIST.
-	addTool(mcp.NewTool("run_command",
-		mcp.WithDescription("Execute a command in Termux shell. Returns JSON {stdout, stderr, exit_code, ...}."),
-		mcp.WithString("command", mcp.Required(), mcp.Description("The program to execute (no shell)")),
-		mcp.WithArray("args", mcp.WithStringItems(),
-			mcp.Description("Arguments, one per element (preserves spaces and metacharacters in each arg)")),
-		mcp.WithString("cwd", mcp.Description("Working directory for the child process")),
-		mcp.WithObject("env_extra", mcp.Description("Extra environment variables to set on top of the parent env")),
-		mcp.WithNumber("timeout_seconds", mcp.Description("Per-call timeout. Default 30s, max 300s.")),
-	), handleRunCommand)
-
-	addTool(mcp.NewTool("install_pkg",
-		mcp.WithDescription("Install a package via pkg install -y"),
-		mcp.WithString("package", mcp.Required(), mcp.Description("Package name")),
-		mcp.WithNumber("timeout_seconds", mcp.Description("Per-call timeout. Default 30s, max 300s.")),
-	), handleInstallPkg)
-
-	addTool(mcp.NewTool("list_pkgs",
-		mcp.WithDescription("List installed packages"),
-	), handleListPkgs)
-
-	addTool(mcp.NewTool("read_env",
-		mcp.WithDescription("Read environment variables. Returns JSON {name, value} or {vars: {...}} when no name is given."),
-		mcp.WithString("name", mcp.Description("Name of the environment variable. If empty, lists all")),
-	), handleReadEnv)
-
-	// termux-api wrappers. These bypass the allowlist because the operator
-	// already opted into them by deploying mcp-termux; the allowlist's job
-	// is to limit the *generic* shell, not the dedicated tools.
-	addTool(mcp.NewTool("termux_battery_status",
-		mcp.WithDescription("Get battery status (level, plugged, health)"),
-		mcp.WithNumber("timeout_seconds", mcp.Description("Per-call timeout")),
-	), handleBatteryStatus)
-
-	addTool(mcp.NewTool("termux_location",
-		mcp.WithDescription("Get device location"),
-		mcp.WithString("provider", mcp.Description("Location provider: gps, network, passive (default: gps)")),
-		mcp.WithString("request", mcp.Description("Request type: once, last, updates (default: once)")),
-		mcp.WithNumber("timeout_seconds", mcp.Description("Per-call timeout")),
-	), handleLocation)
-
-	addTool(mcp.NewTool("termux_notification",
-		mcp.WithDescription("Show an Android notification"),
-		mcp.WithString("title", mcp.Description("Notification title")),
-		mcp.WithString("content", mcp.Description("Notification body")),
-		mcp.WithString("id", mcp.Description("Optional notification id (replace previous)")),
-	), handleNotification)
-
-	addTool(mcp.NewTool("termux_toast",
-		mcp.WithDescription("Show a short on-screen toast"),
-		mcp.WithString("text", mcp.Required(), mcp.Description("Text to display")),
-	), handleToast)
-
-	addTool(mcp.NewTool("termux_sms_send",
-		mcp.WithDescription("Send an SMS. Requires SMS permission for Termux:API."),
-		mcp.WithString("number", mcp.Required(), mcp.Description("Recipient phone number")),
-		mcp.WithString("text", mcp.Required(), mcp.Description("Message body")),
-	), handleSMSSend)
-
-	addTool(mcp.NewTool("termux_tts_speak",
-		mcp.WithDescription("Speak text via the device's TTS engine"),
-		mcp.WithString("text", mcp.Required(), mcp.Description("Text to speak")),
-		mcp.WithString("language", mcp.Description("BCP47 tag, e.g. en-US")),
-		mcp.WithNumber("rate", mcp.Description("Speech rate (1.0 = normal)")),
-		mcp.WithNumber("pitch", mcp.Description("Speech pitch (1.0 = normal)")),
-	), handleTTSSpeak)
+	register(s, slices.Concat(shellTools(), jobTools(), apiTools()))
 }
 
 func handleRunCommand(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -307,7 +239,7 @@ func timeoutFromReq(req mcp.CallToolRequest) time.Duration {
 	if t <= 0 {
 		return 0
 	}
-	if time.Duration(t)*time.Second > maxExecTimeout {
+	if t >= int(maxExecTimeout/time.Second) {
 		return maxExecTimeout
 	}
 	return time.Duration(t) * time.Second
