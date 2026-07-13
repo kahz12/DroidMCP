@@ -31,11 +31,14 @@ Secure file operations within a configurable root directory. Includes path trave
 | Tool | Description |
 |------|-------------|
 | `read_file` | Read the contents of a file |
+| `read_file_lines` | Read a line range from a file |
 | `write_file` | Write or create a file (creates parent dirs) |
 | `list_directory` | List directory contents with type and size |
+| `stat` | File metadata: size, mode, times, owner |
 | `search_files` | Recursive file search using glob patterns |
 | `delete_file` | Delete a file or empty directory |
 | `move_file` | Move or rename a file/directory |
+| `copy_file` | Copy a file |
 
 ### mcp-github
 
@@ -45,12 +48,18 @@ Full GitHub operations using a Personal Access Token. Built on `google/go-github
 |------|-------------|
 | `list_repos` | List repositories for the authenticated user |
 | `get_repo` | Get detailed repository metadata |
+| `list_branches` / `list_tags` / `list_releases` | List repository refs and releases |
+| `list_commits` / `get_commit` | Browse commit history and details |
+| `fork_repo` | Fork a repository |
 | `create_issue` | Open a new issue |
 | `list_issues` | List issues (filterable by state) |
+| `comment_issue` / `close_issue` / `label_issue` | Manage existing issues |
 | `get_file` | Read a file from a repository (auto-decodes Base64) |
 | `get_pr` | Get pull request details |
 | `create_pr` | Create a new pull request |
+| `review_pr` / `merge_pr` | Review and merge pull requests |
 | `commit_file` | Create or update a file via the Content API |
+| `search_code` / `search_issues` | Search code and issues across GitHub |
 
 ### mcp-scraper
 
@@ -62,6 +71,8 @@ Lightweight web scraping without Chromium or Playwright. Built on `colly` and `g
 | `extract_text` | Extract clean text (strips scripts, styles, noise) |
 | `extract_links` | Extract all absolute URLs from a page |
 | `extract_table` | Extract HTML tables as structured JSON |
+| `extract_metadata` | Extract title, description, canonical, `og:*`, `twitter:*` |
+| `search_in_page` | Search text or a regex in a page's visible text, with context |
 
 ### mcp-termux
 
@@ -73,6 +84,10 @@ Direct interaction with the Termux environment. Enables AI agents to execute com
 | `install_pkg` | Install a package via `pkg install` |
 | `list_pkgs` | List installed packages |
 | `read_env` | Read one or all environment variables |
+| `get_storage` | Storage usage for home, prefix, and shared storage |
+| `termux_battery_status` / `termux_location` | Device status via Termux:API |
+| `termux_notification` / `termux_toast` | Show notifications and toasts |
+| `termux_sms_send` / `termux_tts_speak` | Send SMS and speak text via TTS |
 
 ### mcp-network
 
@@ -82,6 +97,9 @@ Local network discovery and port scanning using concurrent TCP probes.
 |------|-------------|
 | `scan_network` | Scan a subnet for active hosts (auto-detects local subnet) |
 | `check_ports` | Scan common ports on a specific host |
+| `nslookup` / `reverse_dns` | Forward and reverse DNS lookups |
+| `traceroute` | Trace the path to a host (no root needed via `tracepath`) |
+| `network_info` | Gateway, DNS servers, interfaces, detected subnet |
 
 ### mcp-clipboard
 

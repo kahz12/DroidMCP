@@ -76,6 +76,11 @@ func registerTools(s *core.DroidServer) {
 		mcp.WithString("name", mcp.Description("Name of the environment variable. If empty, lists all")),
 	), handleReadEnv)
 
+	addTool(mcp.NewTool("get_storage",
+		mcp.WithDescription("Get storage usage (total/used/available bytes) for Termux home, prefix, and shared storage, or a specific path."),
+		mcp.WithString("path", mcp.Description("Optional path to inspect instead of the default set")),
+	), handleGetStorage)
+
 	// termux-api wrappers. These bypass the allowlist because the operator
 	// already opted into them by deploying mcp-termux; the allowlist's job
 	// is to limit the *generic* shell, not the dedicated tools.

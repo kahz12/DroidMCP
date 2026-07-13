@@ -54,7 +54,7 @@ DroidMCP/
 │   │   └── main.go
 │   ├── termux/
 │   │   └── main.go
-│   ├── adb/
+│   ├── clipboard/
 │   │   └── main.go
 │   └── network/
 │       └── main.go
@@ -63,14 +63,15 @@ DroidMCP/
 │   │   └── server.go
 │   ├── logger/
 │   │   └── logger.go
-│   └── config/
-│       └── config.go
+│   ├── config/
+│   │   └── config.go
+│   └── buildinfo/
+│       └── buildinfo.go
 ├── scripts/
 │   └── build-arm64.sh
 ├── docs/
 │   ├── setup-termux.md
-│   ├── claude-code-integration.md
-│   └── gemini-cli-integration.md
+│   └── security.md
 ├── .github/
 │   └── workflows/
 │       └── build.yml
@@ -161,6 +162,7 @@ DroidMCP/
 | `extract_links`    | Extract all links from a page            |
 | `search_in_page`   | Search for text or pattern in a page     |
 | `extract_table`    | Extract HTML tables as JSON              |
+| `extract_metadata` | Extract title, description, og:*, twitter:* |
 
 ### Tasks
 - [x] Integrate `gocolly/colly` + `goquery`
@@ -182,6 +184,7 @@ DroidMCP/
 | `list_pkgs`       | List installed packages              |
 | `read_env`        | Read environment variables           |
 | `get_storage`     | Get available storage info           |
+| `termux_*`        | Termux:API wrappers: battery, location, notification, toast, sms_send, tts_speak |
 
 ### Tasks
 - [x] Security sandbox — whitelist of allowed commands
@@ -193,34 +196,41 @@ DroidMCP/
 
 ## PHASE 5 — mcp-network (DroidNet Integration)
 > **Goal:** Integrate DroidNet Sentinel capabilities as an MCP
-> In planning...
+> Core implemented in pure Go; device inventory pending
 
 ### MCP Tools
-| Tool               | Description                              |
-|--------------------|------------------------------------------|
-| `scan_network`     | Scan devices on local network            |
-| `get_device_info`  | Detailed info about a device             |
-| `list_devices`     | List all known devices                   |
-| `check_ports`      | Port scan a device                       |
+| Tool               | Description                              | Status  |
+|--------------------|------------------------------------------|---------|
+| `scan_network`     | Scan devices on local network            | Done    |
+| `check_ports`      | Port scan a device                       | Done    |
+| `nslookup`         | Forward DNS lookup                       | Done    |
+| `reverse_dns`      | Reverse DNS lookup                       | Done    |
+| `traceroute`       | Trace path to a host                     | Done    |
+| `network_info`     | Gateway, DNS servers, interfaces, subnet | Done    |
+| `get_device_info`  | Detailed info about a device             | Pending |
+| `list_devices`     | List all known devices                   | Pending |
 
 ### Tasks
-- [ ] Port DroidNet Sentinel core logic to Go
-- [ ] Integration with existing Scapy via subprocess (optional)
-- [ ] Requires network permissions on Android
-- [ ] Documentation on requirements (root/no-root)
+- [x] Pure Go implementation (no Scapy/DroidNet subprocess needed)
+- [x] `scan_network` + `check_ports` with private-target guard (`DROIDMCP_NETWORK_ALLOW_PUBLIC` opt-in)
+- [x] DNS, traceroute, and network info tools with unit tests
+- [x] Documentation on requirements and scoping (`docs/security.md`)
+- [ ] `get_device_info` / `list_devices` — requires persistent known-device inventory
 
 ---
 
 ## PHASE 6 — Polish & Community
 > **Goal:** Project ready for open source community
 
-- [x] Complete README in English and Spanish
-- [x] Full documentation in `docs/`
+- [x] Complete README in English (includes Claude Code / Gemini CLI integration)
+- [ ] Spanish translation of the README
+- [x] Core documentation in `docs/` (`setup-termux.md`, `security.md`)
+- [ ] Dedicated integration guides in `docs/` (currently covered in README)
 - [ ] Demo video running on real Android device
 - [x] Publish to `awesome-mcp-servers`
 - [x] Publish to `awesome-termux`
-- [x] First official release with all ARM64 binaries
-- [x] Contributing guide for new collaborators
+- [x] First official release with all ARM64 binaries (`v0.1.0`)
+- [ ] Contributing guide for new collaborators (`CONTRIBUTING.md`)
 
 ---
 

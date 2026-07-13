@@ -1,5 +1,12 @@
 # Binaries
 bin/
+# Stray `go build` output at the repo root (one per cmd/ server)
+/filesystem
+/github
+/scraper
+/termux
+/network
+/clipboard
 *.exe
 *.exe~
 *.dll

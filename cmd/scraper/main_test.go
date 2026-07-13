@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -300,5 +301,185 @@ func TestParseFetchOptionsTimeoutCap(t *testing.T) {
 	}
 	if opts.Timeout != 60*time.Second {
 		t.Fatalf("expected 60s cap, got %v", opts.Timeout)
+	}
+}
+
+func TestHandleSearchInPageLiteral(t *testing.T) {
+	srv := localTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body>
+<script>Needle in script must be ignored</script>
+<p>First needle here.</p>
+<p>Second NEEDLE there.</p>
+</body></html>`))
+	}))
+
+	res, _ := handleSearchInPage(context.Background(), callRequest(map[string]any{
+		"url":   srv.URL,
+		"query": "needle",
+	}))
+	text, isErr := resultText(t, res)
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	var got searchResult
+	if err := json.Unmarshal([]byte(text), &got); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, text)
+	}
+	// Case-insensitive by default, and the <script> occurrence is excluded.
+	if got.Count != 2 || len(got.Matches) != 2 {
+		t.Fatalf("expected 2 matches, got count=%d len=%d", got.Count, len(got.Matches))
+	}
+	if got.Matches[1].Match != "NEEDLE" {
+		t.Errorf("second match: got %q", got.Matches[1].Match)
+	}
+	if !strings.Contains(got.Matches[0].Context, "First needle here.") {
+		t.Errorf("context missing surrounding text: %q", got.Matches[0].Context)
+	}
+	if got.Truncated {
+		t.Error("should not be truncated")
+	}
+}
+
+func TestHandleSearchInPageCaseSensitive(t *testing.T) {
+	srv := localTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body>needle NEEDLE needle</body></html>`))
+	}))
+
+	res, _ := handleSearchInPage(context.Background(), callRequest(map[string]any{
+		"url":            srv.URL,
+		"query":          "NEEDLE",
+		"case_sensitive": true,
+	}))
+	text, isErr := resultText(t, res)
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	var got searchResult
+	if err := json.Unmarshal([]byte(text), &got); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	if got.Count != 1 {
+		t.Fatalf("expected 1 case-sensitive match, got %d", got.Count)
+	}
+}
+
+func TestHandleSearchInPageRegexAndTruncation(t *testing.T) {
+	srv := localTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body>item-1 item-2 item-3 item-42</body></html>`))
+	}))
+
+	res, _ := handleSearchInPage(context.Background(), callRequest(map[string]any{
+		"url":         srv.URL,
+		"query":       `item-\d+`,
+		"regex":       true,
+		"max_results": 2,
+	}))
+	text, isErr := resultText(t, res)
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	var got searchResult
+	if err := json.Unmarshal([]byte(text), &got); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	if got.Count != 4 {
+		t.Errorf("count: expected 4, got %d", got.Count)
+	}
+	if len(got.Matches) != 2 || !got.Truncated {
+		t.Fatalf("expected 2 truncated matches, got len=%d truncated=%v", len(got.Matches), got.Truncated)
+	}
+	if got.Matches[0].Match != "item-1" {
+		t.Errorf("first match: got %q", got.Matches[0].Match)
+	}
+}
+
+func TestHandleSearchInPageSelectorScope(t *testing.T) {
+	srv := localTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body>
+<nav>needle in nav</nav>
+<article id="a">needle in article</article>
+</body></html>`))
+	}))
+
+	res, _ := handleSearchInPage(context.Background(), callRequest(map[string]any{
+		"url":      srv.URL,
+		"query":    "needle",
+		"selector": "#a",
+	}))
+	text, isErr := resultText(t, res)
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	var got searchResult
+	if err := json.Unmarshal([]byte(text), &got); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	if got.Count != 1 {
+		t.Fatalf("expected 1 match inside #a, got %d", got.Count)
+	}
+}
+
+func TestHandleSearchInPageBadInputs(t *testing.T) {
+	srv := localTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body>content</body></html>`))
+	}))
+
+	// Invalid regex.
+	res, _ := handleSearchInPage(context.Background(), callRequest(map[string]any{
+		"url":   srv.URL,
+		"query": `[unclosed`,
+		"regex": true,
+	}))
+	text, isErr := resultText(t, res)
+	if !isErr || !strings.Contains(text, "invalid pattern") {
+		t.Fatalf("expected invalid-pattern error, got isErr=%v %q", isErr, text)
+	}
+
+	// Pattern that matches the empty string.
+	res, _ = handleSearchInPage(context.Background(), callRequest(map[string]any{
+		"url":   srv.URL,
+		"query": `x*`,
+		"regex": true,
+	}))
+	text, isErr = resultText(t, res)
+	if !isErr || !strings.Contains(text, "empty string") {
+		t.Fatalf("expected empty-match error, got isErr=%v %q", isErr, text)
+	}
+
+	// Selector that matches nothing.
+	res, _ = handleSearchInPage(context.Background(), callRequest(map[string]any{
+		"url":      srv.URL,
+		"query":    "content",
+		"selector": "#missing",
+	}))
+	text, isErr = resultText(t, res)
+	if !isErr || !strings.Contains(text, "matched nothing") {
+		t.Fatalf("expected selector-no-match error, got isErr=%v %q", isErr, text)
+	}
+}
+
+func TestHandleSearchInPageUTF8Context(t *testing.T) {
+	srv := localTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body>ééééééééé needle ééééééééé</body></html>`))
+	}))
+
+	res, _ := handleSearchInPage(context.Background(), callRequest(map[string]any{
+		"url":           srv.URL,
+		"query":         "needle",
+		"context_chars": 3,
+	}))
+	text, isErr := resultText(t, res)
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	var got searchResult
+	if err := json.Unmarshal([]byte(text), &got); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	if len(got.Matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(got.Matches))
+	}
+	if !utf8.ValidString(got.Matches[0].Context) {
+		t.Fatalf("context is not valid UTF-8: %q", got.Matches[0].Context)
 	}
 }
