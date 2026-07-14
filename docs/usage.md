@@ -1,0 +1,594 @@
+# DroidMCP Usage Guide
+
+A complete, tool-by-tool reference for operating the DroidMCP servers: how the
+transport works, every environment variable, every tool with its exact
+parameters and defaults, the JSON each one returns, and end-to-end recipes.
+
+For first-time setup on a device see [`setup-termux.md`](setup-termux.md); for
+the threat model and the production checklist see [`security.md`](security.md).
+Versión en español: [`usage.es.md`](usage.es.md).
+
+## Contents
+
+- [How the servers work](#how-the-servers-work)
+- [Quick start](#quick-start)
+- [Configuration reference](#configuration-reference)
+- [Talking to a server](#talking-to-a-server)
+- [Tool reference](#tool-reference)
+  - [mcp-filesystem](#mcp-filesystem)
+  - [mcp-github](#mcp-github)
+  - [mcp-scraper](#mcp-scraper)
+  - [mcp-termux](#mcp-termux)
+  - [mcp-network](#mcp-network)
+  - [mcp-clipboard](#mcp-clipboard)
+- [Recipes](#recipes)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## How the servers work
+
+Every DroidMCP binary is a single MCP server that speaks the Model Context
+Protocol over HTTP with Server-Sent Events (SSE). They all share the same core,
+so the operational behavior below is identical across servers.
+
+**Loopback-only listener.** The listener always binds to `127.0.0.1:<port>` —
+never `0.0.0.0`. A server is therefore unreachable from other devices by
+default. To expose one deliberately you must put a reverse proxy (or an SSH /
+`adb` port-forward) in front of it, at which point authentication and TLS stop
+being optional. See [`security.md`](security.md).
+
+**Endpoints.** Each server exposes three routes:
+
+| Route | Auth | Purpose |
+|-------|------|---------|
+| `GET /sse` | required when a key is set | Opens the long-lived SSE stream. The server replies with an `endpoint` event telling the client where to POST messages. |
+| `POST /message` | required when a key is set | Carries JSON-RPC tool calls for an established session. The client learns the exact URL from the `endpoint` event. |
+| `GET /healthz` | never | Liveness probe. Always `200`, always unauthenticated. |
+
+**Health check.** `/healthz` returns a small JSON document and bypasses auth so
+a supervisor can probe it without holding the key:
+
+```json
+{"status":"ok","server":"mcp-filesystem","version":"dev"}
+```
+
+`version` is `dev` for local builds; release binaries report the git tag.
+
+**Authentication.** When a key is configured, every request except `/healthz`
+must send it in the `X-DroidMCP-Key` header. The comparison is constant-time.
+The key is resolved per server: `DROIDMCP_<SERVER>_KEY` is checked first (for
+example `DROIDMCP_TERMUX_KEY`), then the global `DROIDMCP_API_KEY`. With no key
+set, most servers run in **dev mode** — they accept every request and log
+`auth=disabled` at startup. `mcp-filesystem` and `mcp-termux` have no dev mode:
+they refuse to start without a key.
+
+**TLS.** Set both `DROIDMCP_TLS_CERT` and `DROIDMCP_TLS_KEY` to PEM files and the
+server serves HTTPS and adds an HSTS header. If only one is set, it falls back
+to plain HTTP. Response headers `Cache-Control: no-store` and
+`X-Content-Type-Options: nosniff` are always sent.
+
+**Timeouts and shutdown.** The read-header timeout is 10s and the idle timeout
+is 120s; there is no write timeout because SSE streams are long-lived. On
+`SIGINT` or `SIGTERM` the server drains in-flight connections for up to 10s
+before exiting, so `Ctrl+C` is a clean stop.
+
+**Logging.** Logs go to stderr. `DROIDMCP_LOG_LEVEL` is one of `debug`, `info`,
+`warn`, `error` (default `info`); `DROIDMCP_LOG_FORMAT=json` switches from text
+to structured logs. One `http` line is written per request (deferred until the
+stream closes for SSE). Sensitive attribute keys (`token`, `secret`, `password`,
+`api_key`, `authorization`, `key`) are replaced with `[REDACTED]`, and the
+`X-DroidMCP-Key` header is never logged.
+
+---
+
+## Quick start
+
+Build the binaries (full instructions in [`setup-termux.md`](setup-termux.md)):
+
+```bash
+git clone https://github.com/kahz12/DroidMCP
+cd DroidMCP
+make build          # binaries land in bin/
+```
+
+Run one server. The filesystem server needs both a root and a key, so it is the
+most involved; the rest follow the same shape:
+
+```bash
+export DROIDMCP_PORT=3000
+export DROIDMCP_ROOT=/storage/emulated/0/Documents
+export DROIDMCP_API_KEY="$(openssl rand -base64 32)"
+./bin/droidmcp-filesystem
+```
+
+Confirm it is alive from a second shell:
+
+```bash
+curl -fsS http://localhost:3000/healthz
+# {"status":"ok","server":"mcp-filesystem","version":"dev"}
+```
+
+Then point an MCP client at `http://localhost:3000/sse` with the key in the
+`X-DroidMCP-Key` header (see [Talking to a server](#talking-to-a-server)).
+
+**Running several at once.** Each server needs its own port. In Termux, `tmux`
+gives every server a pane, and `Termux:Boot` can export the variables and exec
+the binaries at device boot. A convention that matches the rest of the docs:
+
+| Server | Suggested port | Binary |
+|--------|:---:|--------|
+| filesystem | `3000` | `droidmcp-filesystem` |
+| github | `3001` | `droidmcp-github` |
+| scraper | `3002` | `droidmcp-scraper` |
+| termux | `3003` | `droidmcp-termux` |
+| network | `3004` | `droidmcp-network` |
+| clipboard | `3005` | `droidmcp-clipboard` |
+
+---
+
+## Configuration reference
+
+Everything is an environment variable prefixed with `DROIDMCP_`. Set it before
+launching the binary.
+
+### Shared by every server
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `DROIDMCP_PORT` | `3000` | TCP port for the SSE listener. Must be `1`–`65535` or the server refuses to start. |
+| `DROIDMCP_API_KEY` | unset | Global key required in `X-DroidMCP-Key`. Unset means dev mode (except filesystem/termux). |
+| `DROIDMCP_<SERVER>_KEY` | unset | Per-server override, e.g. `DROIDMCP_GITHUB_KEY`. Wins over the global key. |
+| `DROIDMCP_TLS_CERT` | unset | PEM certificate path. Both cert and key must be set to enable HTTPS + HSTS. |
+| `DROIDMCP_TLS_KEY` | unset | PEM private key path. |
+| `DROIDMCP_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
+| `DROIDMCP_LOG_FORMAT` | `text` | `json` for structured logs; any other value is text. |
+
+### Per-server
+
+| Variable | Server | Default | Notes |
+|----------|--------|---------|-------|
+| `DROIDMCP_ROOT` | filesystem | none (required) | Directory the server may act on. Must exist and be a directory. The server refuses to start if unset — the shared default of `/` would expose the whole device. |
+| `DROIDMCP_FILESYSTEM_KEY` | filesystem | unset | Required (this or `DROIDMCP_API_KEY`); no dev mode. |
+| `DROIDMCP_MAX_READ_BYTES` | filesystem | `10485760` (10 MiB) | Cap on bytes a single `read_file` buffers. Non-numeric or non-positive values are ignored. |
+| `GITHUB_TOKEN` | github | none (required) | Personal Access Token. See the three accepted names below. |
+| `GITHUB_APP_TOKEN` | github | — | Used if `GITHUB_TOKEN` is unset. |
+| `GITHUB_FINE_GRAINED_TOKEN` | github | — | Used if the two above are unset. |
+| `DROIDMCP_SCRAPER_ALLOW_PRIVATE` | scraper | off | Set to `1` to allow loopback / RFC1918 / link-local / CGNAT targets. Off by default for SSRF safety. |
+| `DROIDMCP_TERMUX_KEY` | termux | unset | Required (this or `DROIDMCP_API_KEY`); no dev mode. |
+| `DROIDMCP_TERMUX_ALLOWLIST` | termux | empty (allow all) | Comma-separated allowlist for `run_command`. Matches the full command or its basename. |
+| `DROIDMCP_NETWORK_ALLOW_PUBLIC` | network | off | Set to `1` to allow non-private scan/`check_ports` targets. Off by default. |
+| `DROIDMCP_NETWORK_DB` | network | `~/.droidmcp/network-devices.json` | Path to the persistent device inventory JSON. |
+| `DROIDMCP_CLIPBOARD_HISTORY_ENTRIES` | clipboard | `32` | Max history entries. Clamped to `1`–`1024`. |
+| `DROIDMCP_CLIPBOARD_HISTORY_BYTES` | clipboard | `65536` (64 KiB) | Max total history bytes. Clamped to `1024`–`16777216` (16 MiB). |
+
+The GitHub token is resolved in order: `GITHUB_TOKEN`, then `GITHUB_APP_TOKEN`,
+then `GITHUB_FINE_GRAINED_TOKEN`. The first one set is used and validated at
+startup with a `GET /user` call; a bad token fails the server immediately
+instead of failing every tool call later.
+
+---
+
+## Talking to a server
+
+DroidMCP implements the MCP SSE transport, so the ergonomic path is to use an
+MCP-aware client and let it manage the session. Two examples:
+
+**Claude Code** — add to `~/.claude/settings.json`:
+
+```jsonc
+{
+  "mcpServers": {
+    "filesystem": {
+      "type": "sse",
+      "url": "http://localhost:3000/sse",
+      "headers": { "X-DroidMCP-Key": "<paste-the-key>" }
+    }
+  }
+}
+```
+
+**Gemini CLI** — same endpoint, `uri` instead of `url`:
+
+```jsonc
+{
+  "mcpServers": {
+    "filesystem": {
+      "uri": "http://localhost:3000/sse",
+      "headers": { "X-DroidMCP-Key": "<paste-the-key>" }
+    }
+  }
+}
+```
+
+Switch the scheme to `https://` once TLS is configured.
+
+**Inspecting by hand.** The session handshake (open `/sse`, read the `endpoint`
+event, POST an `initialize` request, then `tools/call` messages) is tedious to
+drive with `curl`. Use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector)
+or any MCP client for interactive testing. The only endpoint worth probing with
+`curl` directly is the unauthenticated health check:
+
+```bash
+curl -fsS http://localhost:3000/healthz
+```
+
+In the tool reference below, arguments are the JSON object a client sends as the
+`arguments` of a `tools/call` request. "Required" means the call fails with an
+error result if the argument is missing.
+
+---
+
+## Tool reference
+
+Notation for every table: **Required** marks arguments that must be present;
+**Default** is the value used when the argument is omitted. Unless stated
+otherwise, string paths in `mcp-filesystem` are relative to `DROIDMCP_ROOT`.
+
+### mcp-filesystem
+
+Sandboxed file operations under `DROIDMCP_ROOT`. Paths are validated on every
+call: absolute paths are rejected, `..` traversal is rejected, and symlinks are
+resolved and re-checked so a link inside the root cannot point outside it. This
+server requires both `DROIDMCP_ROOT` and a key, and has no dev mode.
+
+**`read_file`** — read a file, optionally a byte range.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `path` | string | yes | — | File path relative to root. |
+| `offset` | number | no | `0` | Byte offset to start reading at. Must be non-negative. |
+| `length` | number | no | `0` | Max bytes to read; `0` reads to end. Must be non-negative and not exceed `DROIDMCP_MAX_READ_BYTES`. |
+
+An unbounded read of a file larger than the cap returns an error telling you to
+page it with `offset`/`length` rather than silently truncating.
+
+**`read_file_lines`** — read a 1-indexed inclusive line range.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `path` | string | yes | — | File path relative to root. |
+| `start` | number | yes | — | First line (1-indexed). Must be `>= 1`. |
+| `end` | number | no | `0` | Last line, inclusive. `0` means end of file; otherwise must be `>= start`. |
+
+**`write_file`** — write or create a file. Parent directories are created
+(`0755`); the file is written `0644`, overwriting any existing content.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `path` | string | yes | File path relative to root. |
+| `content` | string | yes | Content to write. |
+
+**`list_directory`** — list a directory as a JSON array of entries. Each entry
+is `{name, type, size, mode, mode_octal, modified, uid, gid}` where `type` is
+`file`, `dir`, `symlink`, or `other`, `modified` is RFC3339 UTC, and `uid`/`gid`
+are present only on Unix.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `path` | string | yes | Directory path relative to root. |
+
+**`stat`** — metadata for a single path, same shape as one `list_directory`
+entry. Uses `Lstat`, so a symlink is reported as `symlink` rather than followed.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `path` | string | yes | Path relative to root. |
+
+**`search_files`** — recursive name search. Provide exactly one of `pattern` or
+`regex`; the pattern/regex is matched against each entry's name. Returns paths
+relative to the search root, one per line, or `No matches found`.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `root` | string | no | `.` | Directory to start from (relative to root). |
+| `pattern` | string | one of | — | Glob (`filepath.Match` syntax). Mutually exclusive with `regex`. |
+| `regex` | string | one of | — | Regular expression. Mutually exclusive with `pattern`. |
+| `max_results` | number | no | `0` | Stop after this many matches; `0` is unlimited. |
+
+**`delete_file`** — delete a file or directory.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `path` | string | yes | — | Path relative to root. |
+| `recursive` | boolean | no | `false` | Remove non-empty directories recursively. Without it, a non-empty directory errors with a hint. |
+
+**`move_file`** — move or rename. Backed by `os.Rename`, so source and
+destination must be on the same filesystem.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `source` | string | yes | Source path relative to root. |
+| `destination` | string | yes | Destination path relative to root. |
+
+**`copy_file`** — copy a file, or recursively copy a directory tree. File modes
+are preserved; symlinks encountered during a directory copy are skipped.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `source` | string | yes | Source path relative to root. |
+| `destination` | string | yes | Destination path relative to root. |
+
+### mcp-github
+
+Full GitHub operations via a token, built on `google/go-github`. List calls
+accept `per_page` (max 100, default 30) and `page` (default 1); responses embed
+a `_rate_limit` block, and a rate-limit error surfaces the reset time so an
+agent can back off. `owner` and `repo` are required on every repo-scoped tool.
+
+**Repositories**
+
+| Tool | Required args | Optional args |
+|------|---------------|---------------|
+| `list_repos` | — | `per_page`, `page` |
+| `get_repo` | `owner`, `repo` | — |
+| `list_branches` | `owner`, `repo` | `protected_only` (bool), `per_page`, `page` |
+| `list_tags` | `owner`, `repo` | `per_page`, `page` |
+| `list_releases` | `owner`, `repo` | `per_page`, `page` |
+| `list_commits` | `owner`, `repo` | `sha` (SHA/branch to start from), `path` (only commits touching it), `author`, `per_page`, `page` |
+| `get_commit` | `owner`, `repo`, `sha` (SHA, branch, or tag) | — |
+| `fork_repo` | `owner`, `repo` | `organization` (fork into), `name` (rename fork), `default_branch_only` (bool) |
+
+**Issues**
+
+| Tool | Required args | Optional args |
+|------|---------------|---------------|
+| `create_issue` | `owner`, `repo`, `title` | `body` |
+| `list_issues` | `owner`, `repo` | `state` (`open` default, `closed`, `all`), `per_page`, `page` |
+| `comment_issue` | `owner`, `repo`, `number`, `body` | — |
+| `close_issue` | `owner`, `repo`, `number` | `state_reason` (`completed` default, `not_planned`) |
+| `label_issue` | `owner`, `repo`, `number`, `labels` (array) | `replace` (bool: replace vs append) |
+
+`comment_issue` works on both issues and pull requests (a PR is an issue on the
+GitHub API).
+
+**Pull requests**
+
+| Tool | Required args | Optional args |
+|------|---------------|---------------|
+| `get_pr` | `owner`, `repo`, `number` | — |
+| `create_pr` | `owner`, `repo`, `title`, `head`, `base` | `body`, `draft` (bool) |
+| `review_pr` | `owner`, `repo`, `number`, `event` (`APPROVE`, `REQUEST_CHANGES`, `COMMENT`) | `body` (required when `event` is `REQUEST_CHANGES`) |
+| `merge_pr` | `owner`, `repo`, `number` | `commit_title`, `commit_message`, `merge_method` (`merge` default, `squash`, `rebase`), `sha` (merge only if head matches) |
+
+**Files**
+
+| Tool | Required args | Optional args |
+|------|---------------|---------------|
+| `get_file` | `owner`, `repo`, `path` | `ref` (commit/branch/tag; default the repo's default branch). Base64 is auto-decoded. |
+| `commit_file` | `owner`, `repo`, `path`, `content`, `message` | `branch` (default the repo's default branch). Creates or updates the file via the Content API. |
+
+**Search**
+
+| Tool | Required args | Optional args |
+|------|---------------|---------------|
+| `search_code` | `query` | `sort` (`indexed`), `order` (`asc`/`desc`, default `desc`), `per_page`, `page`. Query uses GitHub search syntax, e.g. `language:go addr in:file repo:owner/name`. |
+| `search_issues` | `query` | `sort` (`comments`/`created`/`updated`), `order`, `per_page`, `page`. Searches issues and PRs. |
+
+### mcp-scraper
+
+Chromium-free scraping on `colly` + `goquery`. **SSRF protection is on by
+default**: targets resolving to loopback, RFC1918, IPv6 ULA, link-local,
+multicast, or CGNAT ranges are refused unless `DROIDMCP_SCRAPER_ALLOW_PRIVATE=1`.
+Responses are cached in an in-memory LRU with a 5-minute TTL; response bodies are
+capped at 10 MiB.
+
+**Common arguments** — accepted by every scraper tool:
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `headers` | object | — | Map of request header name to value. |
+| `user_agent` | string | — | Override the `User-Agent` for this request. |
+| `timeout_seconds` | number | `20` | Per-request timeout. Max `60`. |
+| `no_cache` | boolean | `false` | Bypass the response cache for this call. |
+| `wait_selector` | string | — | Retry the fetch until this CSS selector matches (helps with server-rendered/lazy pages). |
+| `wait_attempts` | number | `3` | Max retries when `wait_selector` is set. Max `10`. |
+| `wait_interval_ms` | number | `1000` | Delay between retries when `wait_selector` is set. |
+
+**Tool-specific arguments:**
+
+| Tool | Required args | Extra optional args | Returns |
+|------|---------------|---------------------|---------|
+| `fetch_page` | `url` (http/https only) | — | JSON `{url, status, headers, body, ...}`. |
+| `extract_text` | `url` | `selector` (default `<body>`) | Clean visible text. |
+| `extract_links` | `url` | `selector` (default `a[href]`) | Absolute URLs with anchor text and `rel`. |
+| `extract_table` | `url` | `selector` (default `table`) | Tables as structured JSON. |
+| `extract_metadata` | `url` | — | Title, description, canonical, `og:*`, `twitter:*`. |
+| `search_in_page` | `url`, `query` | `regex` (bool), `case_sensitive` (bool), `selector` (default `<body>`), `max_results` (default `20`, max `100`), `context_chars` (default `80`, max `500`) | Matches with surrounding context. |
+
+For `search_in_page`, `query` is literal text unless `regex` is `true`, in which
+case it is a Go regular expression; matching is case-insensitive unless
+`case_sensitive` is `true`.
+
+### mcp-termux
+
+Direct access to the Termux environment. This server hands the caller real
+authority over the device, so it **requires a key and has no dev mode**. The
+`termux_*` wrapper tools additionally need the `termux-api` package and the
+Termux:API app (see [`setup-termux.md`](setup-termux.md)).
+
+**`run_command`** — execute a program. It runs the binary directly with no shell,
+so there is no glob/pipe/redirect expansion: pass arguments through `args`, not
+as a single string. Returns JSON `{stdout, stderr, exit_code, ...}`; each output
+stream is capped at 1 MiB.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `command` | string | yes | — | The program to execute (no shell). |
+| `args` | string[] | no | `[]` | Arguments passed to the program. |
+| `cwd` | string | no | — | Working directory for the child process. |
+| `timeout_seconds` | number | no | `30` | Per-call timeout. Max `300`. |
+
+When `DROIDMCP_TERMUX_ALLOWLIST` is set, `command` must match one of its
+comma-separated entries (by full value or basename) or the call is refused. An
+empty/unset allowlist allows any command.
+
+**`install_pkg`** — install a package via `pkg install -y`.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `package` | string | yes | — | Package name. |
+| `timeout_seconds` | number | no | `30` | Per-call timeout. Max `300`. |
+
+**`list_pkgs`** — list installed packages. No arguments.
+
+**`read_env`** — read environment variables. Returns `{name, value}` for a named
+variable, or `{vars: {...}}` when `name` is omitted.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `name` | string | no | Variable to read; omit to list all. |
+
+**`get_storage`** — storage usage (total/used/available bytes). With no `path`,
+reports Termux home, prefix, and shared storage.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `path` | string | no | Inspect this path instead of the default set. |
+
+**Termux:API wrappers** (need `termux-api`):
+
+| Tool | Required args | Optional args |
+|------|---------------|---------------|
+| `termux_battery_status` | — | `timeout_seconds` |
+| `termux_location` | — | `provider` (`gps` default, `network`, `passive`), `request` (`once` default, `last`, `updates`), `timeout_seconds` |
+| `termux_notification` | — | `title`, `content`, `id` (reuse to replace a prior notification) |
+| `termux_toast` | `text` | — |
+| `termux_sms_send` | `number`, `text` | — (needs SMS permission granted to Termux:API) |
+| `termux_tts_speak` | `text` | `language` (BCP47, e.g. `en-US`), `rate` (`1.0` = normal), `pitch` (`1.0` = normal) |
+
+### mcp-network
+
+LAN discovery via concurrent TCP probes. **Targets must be in a private range by
+default**; set `DROIDMCP_NETWORK_ALLOW_PUBLIC=1` to permit public hosts. Scan
+results are persisted to the inventory at `DROIDMCP_NETWORK_DB` (default
+`~/.droidmcp/network-devices.json`) and are what `list_devices` /
+`get_device_info` read back.
+
+**`scan_network`** — scan a subnet for active hosts. Returns JSON per host with
+IP, MAC (from ARP), and open ports, and records them in the inventory.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `subnet` | string | no | auto-detected | CIDR to scan, e.g. `192.168.1.0/24`. Empty auto-detects the local subnet from the kernel's interface mask. |
+| `timeout_seconds` | number | no | `30` | Per-call timeout. Max `120`. |
+
+**`check_ports`** — concurrent TCP port check on one host. Returns
+`{host, resolved, ports: [{port, open}]}`.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `host` | string | yes | — | IP or hostname. |
+| `ports` | string | no | common set | Comma-separated ports. The default set is `21,22,23,25,53,80,110,135,139,143,443,445,993,995,1723,3306,3389,5900,8080`. |
+| `timeout_seconds` | number | no | `15` | Per-call timeout. Max `60`. |
+
+**`nslookup`** — forward DNS. Returns `{host, addrs}`.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `host` | string | yes | Hostname to resolve. |
+
+**`reverse_dns`** — reverse DNS. Returns `{ip, names}`.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `ip` | string | yes | IP address to look up. |
+
+**`traceroute`** — trace the path to a host. Shells out to `traceroute` or
+`tracepath`; the latter needs no root.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `host` | string | yes | — | Target host. |
+| `max_hops` | number | no | `30` | Max TTL hops to probe. |
+| `timeout_seconds` | number | no | `30` | Per-call timeout. Max `120`. |
+
+**`network_info`** — local metadata: default gateway (from `/proc/net/route`),
+DNS servers, interfaces, and detected subnet. No arguments.
+
+**`list_devices`** — every device remembered from prior `scan_network` runs. No
+arguments. Empty until you run a scan.
+
+**`get_device_info`** — remembered details (MAC, open ports, first/last seen)
+for one device.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `device` | string | yes | IP or MAC address seen in a previous scan. |
+
+### mcp-clipboard
+
+Clipboard bridge between Android and the agent. Requires the `termux-api`
+package and the Termux:API app; without them the tools fail with a hint naming
+the missing step. Writes are also recorded in a bounded in-process history
+(default 32 entries / 64 KiB, configurable via the two `..._HISTORY_...`
+variables).
+
+**`get_clipboard`** — read the clipboard. Returns
+`{text, bytes_len, base64, is_utf8, truncated}`; binary content is recoverable
+from `base64`. No arguments.
+
+**`set_clipboard`** — write the clipboard. Provide exactly one of `text` or
+`text_base64`; providing both or neither is an error.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `text` | string | one of | UTF-8 text to write. |
+| `text_base64` | string | one of | Base64-encoded bytes, for non-UTF-8/binary content. |
+
+**`clear_clipboard`** — clear the system clipboard and the in-process history.
+Returns `{ok, history_cleared}`. No arguments.
+
+**`clipboard_history`** — the in-process history of writes, oldest first. No
+arguments.
+
+---
+
+## Recipes
+
+**Read a large log in pages.** `read_file` refuses to buffer a file over
+`DROIDMCP_MAX_READ_BYTES` in one shot. Page it: call with `offset: 0,
+length: 1000000`, then `offset: 1000000`, and so on; or use `read_file_lines`
+with a moving `start`/`end` window when you want line boundaries.
+
+**Find then act.** Use `search_files` with a `pattern` like `*.md` (or a `regex`)
+to locate files, then feed the returned relative paths straight back into
+`read_file`, `move_file`, or `delete_file`.
+
+**Scrape a JavaScript-populated table.** If `extract_table` returns nothing
+because the table is injected after load, add `wait_selector: "table tbody tr"`
+so the fetch retries until rows exist, then re-run the extraction.
+
+**Open a PR end to end.** `commit_file` the change onto a branch, `create_pr`
+from that `head` into `base`, optionally `review_pr` with `event: "APPROVE"`,
+then `merge_pr` with `merge_method: "squash"`.
+
+**Inventory the LAN.** Run `scan_network` once (auto-detects the subnet) to
+populate the store, then `list_devices` to see everything and
+`get_device_info` with an IP or MAC for a single host. `check_ports` deep-dives
+one host's ports.
+
+**Push a notification from an agent.** With `mcp-termux` running and Termux:API
+installed, `termux_notification` (title/content) or `termux_toast` (text) surface
+messages on the device; `termux_tts_speak` reads text aloud.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---------|---------------|
+| Server exits immediately, logs `requires DROIDMCP_ROOT` | `mcp-filesystem` was started without `DROIDMCP_ROOT`. Set it to a real directory. |
+| Server exits, logs `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux` need a key. Set one; they have no dev mode. |
+| Server exits, logs `DROIDMCP_PORT out of range` or `not a directory` | Config validation failed. Port must be `1`–`65535`; `DROIDMCP_ROOT` must exist and be a directory. |
+| Clients get `401 unauthorized` | A key is configured but the client isn't sending `X-DroidMCP-Key`, or it doesn't match. `/healthz` is exempt, so a working health probe with failing tool calls points at the header. |
+| `mcp-github` won't start, `token validation failed` | The token is missing, expired, or lacks scope. Set `GITHUB_TOKEN` (or `GITHUB_APP_TOKEN` / `GITHUB_FINE_GRAINED_TOKEN`). |
+| Scraper returns `target is not allowed` / private-range error | SSRF protection blocked a private/loopback URL. Set `DROIDMCP_SCRAPER_ALLOW_PRIVATE=1` only if you trust the deployment. |
+| Network tool returns `not in a private network range` | The target is public and `DROIDMCP_NETWORK_ALLOW_PUBLIC` is off. Set it to `1` to allow public targets. |
+| `read_file` errors `file exceeds max read size` | The file is larger than `DROIDMCP_MAX_READ_BYTES`. Page it with `offset`/`length`, or raise the cap. |
+| Clipboard/termux wrappers fail with a "termux-api not installed" hint | Install `pkg install termux-api` and the Termux:API app, then grant its permissions. |
+| `run_command` says a command is `not in DROIDMCP_TERMUX_ALLOWLIST` | The allowlist is set and doesn't include that command. Add it, or clear the variable to allow all. |
+| Can't reach a server from another machine | By design: the listener is bound to `127.0.0.1`. Front it with a reverse proxy or port-forward, and read [`security.md`](security.md) before exposing it. |
+
+For anything security-related — exposure, keys, TLS, the full threat model —
+see [`security.md`](security.md).
