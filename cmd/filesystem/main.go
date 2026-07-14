@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,8 +32,8 @@ var cfg *config.Config
 const defaultMaxReadBytes = 10 * 1024 * 1024 // 10 MiB
 
 // maxReadBytes is the active read cap. It is a package var (set once in main
-// from DROIDMCP_MAX_READ_BYTES) rather than read per-call, so handlers never
-// touch the viper instance — tests construct Config without one.
+// from DROIDMCP_MAX_READ_BYTES) rather than read per-call, so handlers stay
+// pure and easy to test.
 var maxReadBytes int64 = defaultMaxReadBytes
 
 // fileEntry is the JSON shape returned by list_directory and stat. Pointer
@@ -59,8 +60,8 @@ func main() {
 	// Require an explicit DROIDMCP_ROOT. The shared config defaults ROOT to
 	// "/", which would expose the entire device; the filesystem server is the
 	// only one that acts on ROOT, so it fail-fasts here rather than silently
-	// granting whole-filesystem access.
-	if !cfg.IsSet("ROOT") {
+	// granting whole-filesystem access. An empty value is treated as unset.
+	if os.Getenv("DROIDMCP_ROOT") == "" {
 		logger.Log.Error("mcp-filesystem requires DROIDMCP_ROOT to be set to the directory it may access. Refusing to start (the default of \"/\" would expose the whole device).")
 		os.Exit(1)
 	}
@@ -74,10 +75,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Optional override of the read cap (DROIDMCP_MAX_READ_BYTES). Non-positive
-	// or unset leaves the default in place.
-	if n := cfg.GetInt("MAX_READ_BYTES"); n > 0 {
-		maxReadBytes = int64(n)
+	// Optional override of the read cap (DROIDMCP_MAX_READ_BYTES). Unset,
+	// non-numeric or non-positive values leave the default in place.
+	if raw := os.Getenv("DROIDMCP_MAX_READ_BYTES"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			maxReadBytes = int64(n)
+		}
 	}
 
 	server := core.NewDroidServer("mcp-filesystem", buildinfo.Version)

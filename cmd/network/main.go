@@ -26,12 +26,19 @@ import (
 
 var cfg *config.Config
 
+// devices is the persistent known-host store shared by scan_network (writer)
+// and list_devices / get_device_info (readers). nil until main() sets it, so
+// handlers must nil-check; unit tests inject their own temp-backed store.
+var devices *inventory
+
 func main() {
 	var err error
 	cfg, err = config.LoadConfig()
 	if err != nil {
 		logger.Fatal("Failed to load config", err)
 	}
+
+	devices = newInventory(inventoryPath())
 
 	server := core.NewDroidServer("mcp-network", buildinfo.Version)
 	server.APIKey = config.ResolveAPIKey("network")
@@ -80,6 +87,15 @@ func registerTools(s *core.DroidServer) {
 	add(mcp.NewTool("network_info",
 		mcp.WithDescription("Local network metadata: default gateway, DNS servers, interfaces, detected subnet."),
 	), handleNetworkInfo)
+
+	add(mcp.NewTool("list_devices",
+		mcp.WithDescription("List all devices remembered from previous scan_network runs (persistent inventory). Run scan_network first to populate it."),
+	), handleListDevices)
+
+	add(mcp.NewTool("get_device_info",
+		mcp.WithDescription("Return the remembered details (MAC, open ports, first/last seen) for a single device by IP or MAC address."),
+		mcp.WithString("device", mcp.Required(), mcp.Description("IP address or MAC address of a device seen in a previous scan")),
+	), handleGetDeviceInfo)
 }
 
 // scanResult is the wire shape for scan_network.
@@ -109,6 +125,11 @@ func handleScanNetwork(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 	defer cancel()
 
 	hosts, scanErr := scanSubnet(cctx, ipnet)
+	// Feed the persistent inventory even on a partial (capped/cancelled) scan:
+	// whatever we found is still worth remembering. nil store = recording off.
+	if devices != nil {
+		devices.record(hosts)
+	}
 	res := scanResult{
 		Subnet: ipnet.String(),
 		Count:  len(hosts),
@@ -315,6 +336,35 @@ func chooseTracerouteTool(host string, maxHops int) (string, []string, error) {
 
 func handleNetworkInfo(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return jsonResult(gatherNetworkInfo())
+}
+
+type listDevicesResult struct {
+	Count   int            `json:"count"`
+	Devices []deviceRecord `json:"devices"`
+	Note    string         `json:"note,omitempty"`
+}
+
+func handleListDevices(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if devices == nil {
+		return jsonResult(listDevicesResult{Devices: []deviceRecord{}, Note: "device inventory unavailable"})
+	}
+	list := devices.list()
+	return jsonResult(listDevicesResult{Count: len(list), Devices: list})
+}
+
+func handleGetDeviceInfo(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id, err := req.RequireString("device")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if devices == nil {
+		return mcp.NewToolResultError("device inventory unavailable"), nil
+	}
+	rec, ok := devices.get(id)
+	if !ok {
+		return mcp.NewToolResultError(fmt.Sprintf("no known device matching %q; run scan_network first", id)), nil
+	}
+	return jsonResult(rec)
 }
 
 // parsePorts turns a comma-separated list of port numbers into a sorted

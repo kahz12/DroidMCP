@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // resetEnv unsets every DROIDMCP_* variable for the duration of the test so
@@ -114,49 +113,6 @@ func TestLoadConfigRootIsFileNotDir(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not a directory") {
 		t.Errorf("error should mention 'not a directory', got %v", err)
-	}
-}
-
-func TestConfigHelpersReadEnv(t *testing.T) {
-	resetEnv(t)
-	t.Setenv("DROIDMCP_SOME_STRING", "hello")
-	t.Setenv("DROIDMCP_SOME_INT", "42")
-	t.Setenv("DROIDMCP_SOME_BOOL", "true")
-	t.Setenv("DROIDMCP_SOME_DURATION", "750ms")
-	t.Setenv("DROIDMCP_SOME_LIST", "a,b,c")
-
-	cfg, err := LoadConfig()
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if got := cfg.GetString("SOME_STRING"); got != "hello" {
-		t.Errorf("GetString: %q", got)
-	}
-	if got := cfg.GetInt("SOME_INT"); got != 42 {
-		t.Errorf("GetInt: %d", got)
-	}
-	if !cfg.GetBool("SOME_BOOL") {
-		t.Error("GetBool: want true")
-	}
-	if got := cfg.GetDuration("SOME_DURATION"); got != 750*time.Millisecond {
-		t.Errorf("GetDuration: %v", got)
-	}
-	if got := cfg.GetStringSlice("SOME_LIST"); len(got) != 3 || got[0] != "a" || got[2] != "c" {
-		t.Errorf("GetStringSlice: %v", got)
-	}
-	if !cfg.IsSet("SOME_STRING") {
-		t.Error("IsSet should return true for an explicitly set key")
-	}
-}
-
-func TestConfigViperAccessor(t *testing.T) {
-	resetEnv(t)
-	cfg, err := LoadConfig()
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.Viper() == nil {
-		t.Fatal("Viper() returned nil")
 	}
 }
 

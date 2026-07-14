@@ -253,6 +253,14 @@ export DROIDMCP_NETWORK_ALLOW_PUBLIC=1
 
 Both knobs accept `1`, `true`, `yes`, `on` (case-insensitive).
 
+`mcp-network` also keeps a persistent inventory of every host seen by
+`scan_network` (IP, MAC, open ports, first/last seen) so `list_devices`
+and `get_device_info` can answer without re-scanning. It is written to
+`~/.droidmcp/network-devices.json` (override with `DROIDMCP_NETWORK_DB`)
+with `0600`/`0700` permissions. Treat that file as sensitive — it is a
+map of the local network — and point `DROIDMCP_NETWORK_DB` at a path only
+the service user can read when running multi-tenant.
+
 ## Production checklist
 
 Before exposing any DroidMCP server beyond `localhost`:

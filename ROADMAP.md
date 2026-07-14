@@ -194,28 +194,28 @@ DroidMCP/
 
 ---
 
-## PHASE 5 — mcp-network (DroidNet Integration)
+## PHASE 5 — mcp-network (DroidNet Integration) [DONE]
 > **Goal:** Integrate DroidNet Sentinel capabilities as an MCP
-> Core implemented in pure Go; device inventory pending
+> Implemented in pure Go, no Scapy/DroidNet subprocess needed
 
 ### MCP Tools
-| Tool               | Description                              | Status  |
-|--------------------|------------------------------------------|---------|
-| `scan_network`     | Scan devices on local network            | Done    |
-| `check_ports`      | Port scan a device                       | Done    |
-| `nslookup`         | Forward DNS lookup                       | Done    |
-| `reverse_dns`      | Reverse DNS lookup                       | Done    |
-| `traceroute`       | Trace path to a host                     | Done    |
-| `network_info`     | Gateway, DNS servers, interfaces, subnet | Done    |
-| `get_device_info`  | Detailed info about a device             | Pending |
-| `list_devices`     | List all known devices                   | Pending |
+| Tool               | Description                              |
+|--------------------|------------------------------------------|
+| `scan_network`     | Scan devices on local network            |
+| `check_ports`      | Port scan a device                       |
+| `nslookup`         | Forward DNS lookup                       |
+| `reverse_dns`      | Reverse DNS lookup                       |
+| `traceroute`       | Trace path to a host                     |
+| `network_info`     | Gateway, DNS servers, interfaces, subnet |
+| `get_device_info`  | Detailed info about a known device       |
+| `list_devices`     | List all known devices                   |
 
 ### Tasks
 - [x] Pure Go implementation (no Scapy/DroidNet subprocess needed)
 - [x] `scan_network` + `check_ports` with private-target guard (`DROIDMCP_NETWORK_ALLOW_PUBLIC` opt-in)
 - [x] DNS, traceroute, and network info tools with unit tests
+- [x] Persistent device inventory (`scan_network` feeds it; `get_device_info` / `list_devices` read it), path via `DROIDMCP_NETWORK_DB`
 - [x] Documentation on requirements and scoping (`docs/security.md`)
-- [ ] `get_device_info` / `list_devices` — requires persistent known-device inventory
 
 ---
 
@@ -223,14 +223,14 @@ DroidMCP/
 > **Goal:** Project ready for open source community
 
 - [x] Complete README in English (includes Claude Code / Gemini CLI integration)
-- [ ] Spanish translation of the README
+- [x] Spanish translation of the README (`README.es.md`)
 - [x] Core documentation in `docs/` (`setup-termux.md`, `security.md`)
 - [ ] Dedicated integration guides in `docs/` (currently covered in README)
 - [ ] Demo video running on real Android device
 - [x] Publish to `awesome-mcp-servers`
 - [x] Publish to `awesome-termux`
 - [x] First official release with all ARM64 binaries (`v0.1.0`)
-- [ ] Contributing guide for new collaborators (`CONTRIBUTING.md`)
+- [x] Contributing guide for new collaborators (`CONTRIBUTING.md`)
 
 ---
 

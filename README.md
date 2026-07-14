@@ -1,5 +1,7 @@
 # DroidMCP
 
+> 🇪🇸 [Versión en español](README.es.md)
+
 Native MCP (Model Context Protocol) servers for Android/Termux. High-performance ARM64 binaries written in Go with zero external runtime dependencies.
 
 No Node.js. No Python. Just a single binary that works.
@@ -100,6 +102,8 @@ Local network discovery and port scanning using concurrent TCP probes.
 | `nslookup` / `reverse_dns` | Forward and reverse DNS lookups |
 | `traceroute` | Trace the path to a host (no root needed via `tracepath`) |
 | `network_info` | Gateway, DNS servers, interfaces, detected subnet |
+| `list_devices` | List devices remembered from previous scans (persistent inventory) |
+| `get_device_info` | Details for one known device by IP or MAC |
 
 ### mcp-clipboard
 
@@ -197,6 +201,7 @@ below is a quick reference.
 | `DROIDMCP_TERMUX_ALLOWLIST` | `mcp-termux` | Comma-separated allowlist for `run_command` (empty = allow all). |
 | `DROIDMCP_SCRAPER_ALLOW_PRIVATE` | `mcp-scraper` | Set to `1` to allow RFC1918/loopback URLs (off by default for SSRF safety). |
 | `DROIDMCP_NETWORK_ALLOW_PUBLIC` | `mcp-network` | Set to `1` to allow non-RFC1918 scan targets. |
+| `DROIDMCP_NETWORK_DB` | `mcp-network` | Path to the persistent device inventory JSON (default `~/.droidmcp/network-devices.json`). |
 | `DROIDMCP_CLIPBOARD_HISTORY_ENTRIES` | `mcp-clipboard` | Cap on in-memory history entries. |
 | `DROIDMCP_CLIPBOARD_HISTORY_BYTES` | `mcp-clipboard` | Cap on in-memory history bytes. |
 
@@ -418,7 +423,9 @@ production checklist. Highlights:
 
 ## Contributing
 
-Contributions are welcome. See [ROADMAP.md](ROADMAP.md) for planned features and open phases.
+Contributions are welcome. Read the guide in
+[CONTRIBUTING.md](CONTRIBUTING.md) and see [ROADMAP.md](ROADMAP.md) for
+planned features and open phases.
 
 1. Fork the repository
 2. Create a feature branch
