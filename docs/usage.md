@@ -21,6 +21,7 @@ Versión en español: [`usage.es.md`](usage.es.md).
   - [mcp-termux](#mcp-termux)
   - [mcp-network](#mcp-network)
   - [mcp-clipboard](#mcp-clipboard)
+  - [mcp-media](#mcp-media)
 - [Recipes](#recipes)
 - [Troubleshooting](#troubleshooting)
 
@@ -60,8 +61,8 @@ must send it in the `X-DroidMCP-Key` header. The comparison is constant-time.
 The key is resolved per server: `DROIDMCP_<SERVER>_KEY` is checked first (for
 example `DROIDMCP_TERMUX_KEY`), then the global `DROIDMCP_API_KEY`. With no key
 set, most servers run in **dev mode** — they accept every request and log
-`auth=disabled` at startup. `mcp-filesystem` and `mcp-termux` have no dev mode:
-they refuse to start without a key.
+`auth=disabled` at startup. `mcp-filesystem`, `mcp-termux`, and `mcp-media` have
+no dev mode: they refuse to start without a key.
 
 **TLS.** Set both `DROIDMCP_TLS_CERT` and `DROIDMCP_TLS_KEY` to PEM files and the
 server serves HTTPS and adds an HSTS header. If only one is set, it falls back
@@ -124,6 +125,7 @@ the binaries at device boot. A convention that matches the rest of the docs:
 | termux | `3003` | `droidmcp-termux` |
 | network | `3004` | `droidmcp-network` |
 | clipboard | `3005` | `droidmcp-clipboard` |
+| media | `3006` | `droidmcp-media` |
 
 ---
 
@@ -148,7 +150,7 @@ launching the binary.
 
 | Variable | Server | Default | Notes |
 |----------|--------|---------|-------|
-| `DROIDMCP_ROOT` | filesystem | none (required) | Directory the server may act on. Must exist and be a directory. The server refuses to start if unset — the shared default of `/` would expose the whole device. |
+| `DROIDMCP_ROOT` | filesystem · media | none (required) | Directory the server may act on. Must exist and be a directory. Both filesystem and media refuse to start if unset — the shared default of `/` would expose the whole device. |
 | `DROIDMCP_FILESYSTEM_KEY` | filesystem | unset | Required (this or `DROIDMCP_API_KEY`); no dev mode. |
 | `DROIDMCP_MAX_READ_BYTES` | filesystem | `10485760` (10 MiB) | Cap on bytes a single `read_file` buffers. Non-numeric or non-positive values are ignored. |
 | `GITHUB_TOKEN` | github | none (required) | Personal Access Token. See the three accepted names below. |
@@ -161,6 +163,9 @@ launching the binary.
 | `DROIDMCP_NETWORK_DB` | network | `~/.droidmcp/network-devices.json` | Path to the persistent device inventory JSON. |
 | `DROIDMCP_CLIPBOARD_HISTORY_ENTRIES` | clipboard | `32` | Max history entries. Clamped to `1`–`1024`. |
 | `DROIDMCP_CLIPBOARD_HISTORY_BYTES` | clipboard | `65536` (64 KiB) | Max total history bytes. Clamped to `1024`–`16777216` (16 MiB). |
+| `DROIDMCP_MEDIA_KEY` | media | unset | Required (this or `DROIDMCP_API_KEY`); no dev mode. |
+| `DROIDMCP_MEDIA_FFMPEG` | media | PATH lookup | Explicit path to the `ffmpeg` binary used by `convert_image`, `thumbnail`, and `extract_audio`. |
+| `DROIDMCP_MEDIA_EXIFTOOL` | media | PATH lookup | Explicit path to `exiftool`; when present, enriches `get_metadata`. |
 
 The GitHub token is resolved in order: `GITHUB_TOKEN`, then `GITHUB_APP_TOKEN`,
 then `GITHUB_FINE_GRAINED_TOKEN`. The first one set is used and validated at
@@ -542,6 +547,82 @@ Returns `{ok, history_cleared}`. No arguments.
 **`clipboard_history`** — the in-process history of writes, oldest first. No
 arguments.
 
+### mcp-media
+
+Browsing and transformation of on-device media under `DROIDMCP_ROOT`. Paths are
+validated exactly as in `mcp-filesystem` — absolute paths and `..` are rejected,
+and symlinks are resolved and re-checked so a link inside the root cannot point
+outside it. Like filesystem, this server **requires both `DROIDMCP_ROOT` and a
+key and has no dev mode**: it reads and writes files and spawns subprocesses.
+`list_media` and image dimensions are pure Go; the transform tools shell out to
+`ffmpeg` (`pkg install ffmpeg`), and `get_metadata` is enriched by `exiftool`
+when it is installed. Every `path`/`source`/`destination` is relative to
+`DROIDMCP_ROOT`.
+
+**`list_media`** — list media files under a directory. Returns a JSON array of
+`{name, path, type, ext, size, modified}` where `type` is `image`, `video`, or
+`audio`, `path` is relative to root, and `modified` is RFC3339 UTC. Non-media
+files are skipped.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `path` | string | no | `.` | Directory to scan, relative to root. |
+| `types` | string[] | no | all kinds | Filter by kind: any of `image`, `video`, `audio`. |
+| `recursive` | boolean | no | `false` | Descend into subdirectories. |
+| `max_results` | number | no | `0` | Stop after this many matches; `0` is unlimited. |
+
+**`get_metadata`** — metadata for one media file. Always returns
+`{path, type, ext, size, modified}`; adds `width`/`height` for images the stdlib
+can decode a header for (JPEG, PNG, GIF), and an `exif` object with the full tag
+set when `exiftool` is installed (absolute-path fields are stripped).
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `path` | string | yes | Media file relative to root. |
+
+**`convert_image`** — convert an image and/or resize it via `ffmpeg`. The output
+format is taken from the destination extension. Returns JSON
+`{ok, tool, source, destination, exit_code, duration_ms}`; a non-zero exit
+surfaces the tail of ffmpeg's stderr, and any output file the failed run created
+is removed (`partial_output_removed: true`) — a destination that already existed
+before the call is never deleted by cleanup.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `source` | string | yes | — | Source image relative to root. |
+| `destination` | string | yes | — | Destination relative to root; the extension picks the format. Must differ from `source`. |
+| `width` | number | no | `0` | Target width in px. `0` keeps aspect from `height` (or the original when both are `0`). |
+| `height` | number | no | `0` | Target height in px. `0` keeps aspect from `width`. |
+| `quality` | number | no | — | Quality `1`–`100` (higher is better). Applied to JPEG destinations only. |
+| `timeout_seconds` | number | no | `120` | Per-call timeout. Max `600`. |
+
+**`thumbnail`** — a single scaled frame from an image or video via `ffmpeg`. For
+video, the frame is grabbed at `timestamp`. Same result shape as `convert_image`.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `source` | string | yes | — | Source media relative to root. |
+| `destination` | string | yes | — | Destination image relative to root. Must differ from `source`. |
+| `width` | number | no | `320` | Thumbnail width in px (height auto when omitted). |
+| `height` | number | no | `0` | Thumbnail height in px; `0` keeps aspect ratio. |
+| `timestamp` | string | no | `0` | For video: seek position, seconds (`5`) or `HH:MM:SS` (`00:00:05`). |
+| `timeout_seconds` | number | no | `120` | Per-call timeout. Max `600`. |
+
+**`extract_audio`** — extract the audio track from a video via `ffmpeg -vn`. By
+default the stream is copied without re-encoding. Same result shape as
+`convert_image`.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `source` | string | yes | — | Source video relative to root. |
+| `destination` | string | yes | — | Destination audio relative to root. Must differ from `source`. |
+| `codec` | string | no | `copy` | Audio codec, e.g. `mp3`, `aac`, `flac`. `copy` re-muxes without re-encoding. |
+| `bitrate` | string | no | — | Target bitrate when re-encoding, e.g. `192k`. Ignored when `codec` is `copy`. |
+| `timeout_seconds` | number | no | `120` | Per-call timeout. Max `600`. |
+
+The transform tools fail with an install hint when `ffmpeg` is not found. Set
+`DROIDMCP_MEDIA_FFMPEG` / `DROIDMCP_MEDIA_EXIFTOOL` to pin a specific binary.
+
 ---
 
 ## Recipes
@@ -572,14 +653,20 @@ one host's ports.
 installed, `termux_notification` (title/content) or `termux_toast` (text) surface
 messages on the device; `termux_tts_speak` reads text aloud.
 
+**Thumbnail a media folder.** `list_media` with `recursive: true` (optionally
+`types: ["video"]`) enumerates the files; feed each returned `path` into
+`thumbnail`, writing to a `thumbs/` destination and passing a `timestamp` to grab
+a representative frame from videos. `get_metadata` gives you dimensions and EXIF
+for any single file, and `convert_image` / `extract_audio` handle format changes.
+
 ---
 
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 |---------|---------------|
-| Server exits immediately, logs `requires DROIDMCP_ROOT` | `mcp-filesystem` was started without `DROIDMCP_ROOT`. Set it to a real directory. |
-| Server exits, logs `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux` need a key. Set one; they have no dev mode. |
+| Server exits immediately, logs `requires DROIDMCP_ROOT` | `mcp-filesystem` or `mcp-media` was started without `DROIDMCP_ROOT`. Set it to a real directory. |
+| Server exits, logs `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux`/`mcp-media` need a key. Set one; they have no dev mode. |
 | Server exits, logs `DROIDMCP_PORT out of range` or `not a directory` | Config validation failed. Port must be `1`–`65535`; `DROIDMCP_ROOT` must exist and be a directory. |
 | Clients get `401 unauthorized` | A key is configured but the client isn't sending `X-DroidMCP-Key`, or it doesn't match. `/healthz` is exempt, so a working health probe with failing tool calls points at the header. |
 | `mcp-github` won't start, `token validation failed` | The token is missing, expired, or lacks scope. Set `GITHUB_TOKEN` (or `GITHUB_APP_TOKEN` / `GITHUB_FINE_GRAINED_TOKEN`). |
@@ -588,6 +675,7 @@ messages on the device; `termux_tts_speak` reads text aloud.
 | `read_file` errors `file exceeds max read size` | The file is larger than `DROIDMCP_MAX_READ_BYTES`. Page it with `offset`/`length`, or raise the cap. |
 | Clipboard/termux wrappers fail with a "termux-api not installed" hint | Install `pkg install termux-api` and the Termux:API app, then grant its permissions. |
 | `run_command` says a command is `not in DROIDMCP_TERMUX_ALLOWLIST` | The allowlist is set and doesn't include that command. Add it, or clear the variable to allow all. |
+| `mcp-media` transform fails with an `ffmpeg not found` hint | `convert_image`/`thumbnail`/`extract_audio` need ffmpeg. Run `pkg install ffmpeg`, or set `DROIDMCP_MEDIA_FFMPEG` to its path. |
 | Can't reach a server from another machine | By design: the listener is bound to `127.0.0.1`. Front it with a reverse proxy or port-forward, and read [`security.md`](security.md) before exposing it. |
 
 For anything security-related — exposure, keys, TLS, the full threat model —

@@ -23,6 +23,7 @@ de producción, ver [`security.md`](security.md). Versión en inglés:
   - [mcp-termux](#mcp-termux)
   - [mcp-network](#mcp-network)
   - [mcp-clipboard](#mcp-clipboard)
+  - [mcp-media](#mcp-media)
 - [Recetas](#recetas)
 - [Resolución de problemas](#resolución-de-problemas)
 
@@ -65,7 +66,8 @@ tiempo constante. La key se resuelve por servidor: primero se comprueba
 `DROIDMCP_<SERVER>_KEY` (por ejemplo `DROIDMCP_TERMUX_KEY`) y luego la global
 `DROIDMCP_API_KEY`. Sin key definida, la mayoría de servidores corren en **modo
 dev** — aceptan todas las peticiones y registran `auth=disabled` al arrancar.
-`mcp-filesystem` y `mcp-termux` no tienen modo dev: se niegan a arrancar sin key.
+`mcp-filesystem`, `mcp-termux` y `mcp-media` no tienen modo dev: se niegan a
+arrancar sin key.
 
 **TLS.** Define `DROIDMCP_TLS_CERT` y `DROIDMCP_TLS_KEY` apuntando a archivos PEM
 y el servidor sirve HTTPS y añade una cabecera HSTS. Si solo defines una de las
@@ -130,6 +132,7 @@ el resto de la documentación:
 | termux | `3003` | `droidmcp-termux` |
 | network | `3004` | `droidmcp-network` |
 | clipboard | `3005` | `droidmcp-clipboard` |
+| media | `3006` | `droidmcp-media` |
 
 ---
 
@@ -154,7 +157,7 @@ lanzar el binario.
 
 | Variable | Servidor | Por defecto | Notas |
 |----------|----------|-------------|-------|
-| `DROIDMCP_ROOT` | filesystem | ninguno (requerido) | Directorio sobre el que puede actuar el servidor. Debe existir y ser un directorio. El servidor no arranca si está sin definir — el default compartido de `/` expondría todo el dispositivo. |
+| `DROIDMCP_ROOT` | filesystem · media | ninguno (requerido) | Directorio sobre el que puede actuar el servidor. Debe existir y ser un directorio. Tanto filesystem como media no arrancan si está sin definir — el default compartido de `/` expondría todo el dispositivo. |
 | `DROIDMCP_FILESYSTEM_KEY` | filesystem | sin definir | Requerida (esta o `DROIDMCP_API_KEY`); sin modo dev. |
 | `DROIDMCP_MAX_READ_BYTES` | filesystem | `10485760` (10 MiB) | Límite de bytes que un solo `read_file` mantiene en memoria. Valores no numéricos o no positivos se ignoran. |
 | `GITHUB_TOKEN` | github | ninguno (requerido) | Personal Access Token. Ver los tres nombres aceptados abajo. |
@@ -167,6 +170,9 @@ lanzar el binario.
 | `DROIDMCP_NETWORK_DB` | network | `~/.droidmcp/network-devices.json` | Ruta al JSON del inventario persistente de dispositivos. |
 | `DROIDMCP_CLIPBOARD_HISTORY_ENTRIES` | clipboard | `32` | Máximo de entradas del historial. Acotado a `1`–`1024`. |
 | `DROIDMCP_CLIPBOARD_HISTORY_BYTES` | clipboard | `65536` (64 KiB) | Máximo de bytes totales del historial. Acotado a `1024`–`16777216` (16 MiB). |
+| `DROIDMCP_MEDIA_KEY` | media | sin definir | Requerida (esta o `DROIDMCP_API_KEY`); sin modo dev. |
+| `DROIDMCP_MEDIA_FFMPEG` | media | búsqueda en PATH | Ruta explícita al binario `ffmpeg` usado por `convert_image`, `thumbnail` y `extract_audio`. |
+| `DROIDMCP_MEDIA_EXIFTOOL` | media | búsqueda en PATH | Ruta explícita a `exiftool`; cuando está presente, enriquece `get_metadata`. |
 
 El token de GitHub se resuelve en orden: `GITHUB_TOKEN`, luego
 `GITHUB_APP_TOKEN`, luego `GITHUB_FINE_GRAINED_TOKEN`. Se usa el primero que esté
@@ -558,6 +564,84 @@ proceso. Devuelve `{ok, history_cleared}`. Sin argumentos.
 **`clipboard_history`** — el historial de escrituras en el proceso, del más
 antiguo al más reciente. Sin argumentos.
 
+### mcp-media
+
+Navegación y transformación de medios del dispositivo bajo `DROIDMCP_ROOT`. Las
+rutas se validan igual que en `mcp-filesystem` — se rechazan las rutas absolutas y
+el `..`, y los symlinks se resuelven y re-verifican para que un enlace dentro de la
+raíz no pueda apuntar fuera. Como filesystem, este servidor **requiere tanto
+`DROIDMCP_ROOT` como una key y no tiene modo dev**: lee y escribe archivos y lanza
+subprocesos. `list_media` y las dimensiones de imagen son Go puro; las tools de
+transformación usan `ffmpeg` (`pkg install ffmpeg`), y `get_metadata` se enriquece
+con `exiftool` cuando está instalado. Cada `path`/`source`/`destination` es
+relativo a `DROIDMCP_ROOT`.
+
+**`list_media`** — lista archivos de medios bajo un directorio. Devuelve un array
+JSON de `{name, path, type, ext, size, modified}` donde `type` es `image`, `video`
+o `audio`, `path` es relativo a la raíz y `modified` es RFC3339 UTC. Los archivos
+que no son medios se omiten.
+
+| Argumento | Tipo | Requerido | Por defecto | Descripción |
+|-----------|------|:---:|-------------|-------------|
+| `path` | string | no | `.` | Directorio a escanear, relativo a la raíz. |
+| `types` | string[] | no | todos | Filtra por tipo: cualquiera de `image`, `video`, `audio`. |
+| `recursive` | boolean | no | `false` | Desciende a subdirectorios. |
+| `max_results` | number | no | `0` | Detenerse tras esta cantidad de coincidencias; `0` = sin límite. |
+
+**`get_metadata`** — metadatos de un archivo de medios. Siempre devuelve
+`{path, type, ext, size, modified}`; añade `width`/`height` para las imágenes cuyo
+encabezado puede decodificar la stdlib (JPEG, PNG, GIF), y un objeto `exif` con el
+conjunto completo de tags cuando `exiftool` está instalado (los campos con ruta
+absoluta se eliminan).
+
+| Argumento | Tipo | Requerido | Descripción |
+|-----------|------|:---:|-------------|
+| `path` | string | sí | Archivo de medios relativo a la raíz. |
+
+**`convert_image`** — convierte una imagen y/o la redimensiona vía `ffmpeg`. El
+formato de salida se toma de la extensión del destino. Devuelve JSON
+`{ok, tool, source, destination, exit_code, duration_ms}`; un exit distinto de cero
+expone el final del stderr de ffmpeg, y cualquier archivo de salida creado por la
+ejecución fallida se elimina (`partial_output_removed: true`) — un destino que ya
+existía antes de la llamada nunca se borra en la limpieza.
+
+| Argumento | Tipo | Requerido | Por defecto | Descripción |
+|-----------|------|:---:|-------------|-------------|
+| `source` | string | sí | — | Imagen origen relativa a la raíz. |
+| `destination` | string | sí | — | Destino relativo a la raíz; la extensión elige el formato. Debe diferir de `source`. |
+| `width` | number | no | `0` | Ancho objetivo en px. `0` mantiene el aspecto según `height` (o el original si ambos son `0`). |
+| `height` | number | no | `0` | Alto objetivo en px. `0` mantiene el aspecto según `width`. |
+| `quality` | number | no | — | Calidad `1`–`100` (mayor es mejor). Se aplica solo a destinos JPEG. |
+| `timeout_seconds` | number | no | `120` | Timeout por llamada. Máx `600`. |
+
+**`thumbnail`** — un único frame escalado de una imagen o vídeo vía `ffmpeg`. Para
+vídeo, el frame se toma en `timestamp`. Misma forma de resultado que `convert_image`.
+
+| Argumento | Tipo | Requerido | Por defecto | Descripción |
+|-----------|------|:---:|-------------|-------------|
+| `source` | string | sí | — | Medio origen relativo a la raíz. |
+| `destination` | string | sí | — | Imagen destino relativa a la raíz. Debe diferir de `source`. |
+| `width` | number | no | `320` | Ancho de la miniatura en px (alto automático si se omite). |
+| `height` | number | no | `0` | Alto de la miniatura en px; `0` mantiene la relación de aspecto. |
+| `timestamp` | string | no | `0` | Para vídeo: posición de búsqueda, segundos (`5`) o `HH:MM:SS` (`00:00:05`). |
+| `timeout_seconds` | number | no | `120` | Timeout por llamada. Máx `600`. |
+
+**`extract_audio`** — extrae la pista de audio de un vídeo vía `ffmpeg -vn`. Por
+defecto la pista se copia sin recodificar. Misma forma de resultado que
+`convert_image`.
+
+| Argumento | Tipo | Requerido | Por defecto | Descripción |
+|-----------|------|:---:|-------------|-------------|
+| `source` | string | sí | — | Vídeo origen relativo a la raíz. |
+| `destination` | string | sí | — | Audio destino relativo a la raíz. Debe diferir de `source`. |
+| `codec` | string | no | `copy` | Codec de audio, p. ej. `mp3`, `aac`, `flac`. `copy` re-multiplexa sin recodificar. |
+| `bitrate` | string | no | — | Bitrate objetivo al recodificar, p. ej. `192k`. Se ignora cuando `codec` es `copy`. |
+| `timeout_seconds` | number | no | `120` | Timeout por llamada. Máx `600`. |
+
+Las tools de transformación fallan con una pista de instalación cuando no se
+encuentra `ffmpeg`. Define `DROIDMCP_MEDIA_FFMPEG` / `DROIDMCP_MEDIA_EXIFTOOL` para
+fijar un binario concreto.
+
 ---
 
 ## Recetas
@@ -591,14 +675,21 @@ Termux:API instalado, `termux_notification` (title/content) o `termux_toast`
 (text) muestran mensajes en el dispositivo; `termux_tts_speak` lee texto en voz
 alta.
 
+**Miniaturizar una carpeta de medios.** `list_media` con `recursive: true`
+(opcionalmente `types: ["video"]`) enumera los archivos; alimenta cada `path`
+devuelto a `thumbnail`, escribiendo a un destino `thumbs/` y pasando un
+`timestamp` para tomar un frame representativo de los vídeos. `get_metadata` te da
+dimensiones y EXIF de cualquier archivo, y `convert_image` / `extract_audio`
+manejan los cambios de formato.
+
 ---
 
 ## Resolución de problemas
 
 | Síntoma | Causa y solución |
 |---------|------------------|
-| El servidor sale de inmediato, registra `requires DROIDMCP_ROOT` | `mcp-filesystem` se arrancó sin `DROIDMCP_ROOT`. Defínelo a un directorio real. |
-| El servidor sale, registra `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux` necesitan una key. Define una; no tienen modo dev. |
+| El servidor sale de inmediato, registra `requires DROIDMCP_ROOT` | `mcp-filesystem` o `mcp-media` se arrancó sin `DROIDMCP_ROOT`. Defínelo a un directorio real. |
+| El servidor sale, registra `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux`/`mcp-media` necesitan una key. Define una; no tienen modo dev. |
 | El servidor sale, registra `DROIDMCP_PORT out of range` o `not a directory` | Falló la validación de configuración. El puerto debe estar en `1`–`65535`; `DROIDMCP_ROOT` debe existir y ser un directorio. |
 | Los clientes reciben `401 unauthorized` | Hay una key configurada pero el cliente no envía `X-DroidMCP-Key`, o no coincide. `/healthz` está exento, así que un health check que funciona con llamadas a tools que fallan apunta a la cabecera. |
 | `mcp-github` no arranca, `token validation failed` | El token falta, expiró o carece de scope. Define `GITHUB_TOKEN` (o `GITHUB_APP_TOKEN` / `GITHUB_FINE_GRAINED_TOKEN`). |
@@ -607,6 +698,7 @@ alta.
 | `read_file` da error `file exceeds max read size` | El archivo es mayor que `DROIDMCP_MAX_READ_BYTES`. Paginado con `offset`/`length`, o sube el tope. |
 | Los envoltorios de clipboard/termux fallan con una pista «termux-api not installed» | Instala `pkg install termux-api` y la app Termux:API, y concede sus permisos. |
 | `run_command` dice que un comando `not in DROIDMCP_TERMUX_ALLOWLIST` | La allowlist está definida y no incluye ese comando. Añádelo, o vacía la variable para permitir todo. |
+| Una transformación de `mcp-media` falla con una pista `ffmpeg not found` | `convert_image`/`thumbnail`/`extract_audio` necesitan ffmpeg. Ejecuta `pkg install ffmpeg`, o define `DROIDMCP_MEDIA_FFMPEG` con su ruta. |
 | No puedes alcanzar un servidor desde otra máquina | Es por diseño: el listener está enlazado a `127.0.0.1`. Ponle delante un proxy inverso o un reenvío de puertos, y lee [`security.md`](security.md) antes de exponerlo. |
 
 Para cualquier cosa relacionada con seguridad — exposición, keys, TLS, el modelo

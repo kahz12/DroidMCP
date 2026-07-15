@@ -7,6 +7,7 @@ bin/
 /termux
 /network
 /clipboard
+/media
 *.exe
 *.exe~
 *.dll

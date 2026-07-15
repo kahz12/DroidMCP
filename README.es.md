@@ -29,9 +29,9 @@ DroidMCP es un monorepo de servidores MCP diseñados para ejecutarse de forma na
                      ▼
               Servidor DroidMCP          corre en Termux (Android)
                      │
-   ┌────────────┬────────────┬──────────┬────────────┬────────────┐
-   ▼            ▼            ▼          ▼            ▼            ▼
-filesystem   github      scraper    termux      network     clipboard
+   ┌────────────┬────────────┬──────────┬────────────┬────────────┬────────┐
+   ▼            ▼            ▼          ▼            ▼            ▼        ▼
+filesystem   github      scraper    termux      network     clipboard   media
 ```
 
 ## Servidores
@@ -44,6 +44,7 @@ filesystem   github      scraper    termux      network     clipboard
 | `mcp-termux` | Ejecución de shell y gestión de paquetes | `3003` |
 | `mcp-network` | Descubrimiento de LAN y escaneo de puertos | `3004` |
 | `mcp-clipboard` | Puente del portapapeles de Android vía Termux:API | `3005` |
+| `mcp-media` | Navegación de medios y transformaciones con `ffmpeg` | `3006` |
 
 <details open>
 <summary><b>mcp-filesystem</b> — operaciones de archivos seguras dentro de una raíz configurable</summary>
@@ -143,6 +144,24 @@ filesystem   github      scraper    termux      network     clipboard
 
 </details>
 
+<details>
+<summary><b>mcp-media</b> — navegación y transformación de medios dentro de una raíz configurable</summary>
+
+> La conversión, las miniaturas y la extracción de audio usan `ffmpeg`
+> (`pkg install ffmpeg`); `get_metadata` se enriquece con `exiftool` cuando está
+> instalado. El listado y las dimensiones de imagen no necesitan herramientas
+> externas. Como `mcp-filesystem`, este servidor requiere `DROIDMCP_ROOT` y una key.
+
+| Tool | Descripción |
+|------|-------------|
+| `list_media` | Lista archivos de imagen/vídeo/audio (recursivo, filtrable por tipo) |
+| `get_metadata` | Tamaño, dimensiones de imagen y EXIF/metadatos de un archivo |
+| `convert_image` | Convierte el formato de una imagen y/o la redimensiona |
+| `thumbnail` | Genera una miniatura desde una imagen o un frame de vídeo |
+| `extract_audio` | Extrae la pista de audio de un vídeo |
+
+</details>
+
 ---
 
 ## Instalación
@@ -166,7 +185,7 @@ make build-arm64      # compilación cruzada desde otra máquina
 
 `make build` genera un binario por servidor en `bin/`: `droidmcp-filesystem`,
 `droidmcp-github`, `droidmcp-scraper`, `droidmcp-termux`, `droidmcp-network`,
-`droidmcp-clipboard`.
+`droidmcp-clipboard`, `droidmcp-media`.
 
 ---
 
@@ -181,7 +200,7 @@ logging, modelo de amenazas) está en [`docs/security.md`](docs/security.md).
 | Variable | Descripción | Por defecto |
 |----------|-------------|-------------|
 | `DROIDMCP_PORT` | Puerto TCP donde escucha el listener SSE | `3000` |
-| `DROIDMCP_ROOT` | Raíz de archivos, validada al arrancar. **Obligatoria en `mcp-filesystem`.** | `/` (los demás la ignoran) |
+| `DROIDMCP_ROOT` | Raíz de archivos, validada al arrancar. **Obligatoria en `mcp-filesystem` y `mcp-media`.** | `/` (los demás la ignoran) |
 | `DROIDMCP_API_KEY` | Key global. Si está definida, toda petición debe llevar `X-DroidMCP-Key` | sin definir (modo dev) |
 | `DROIDMCP_<SERVER>_KEY` | Override por servidor, p. ej. `DROIDMCP_TERMUX_KEY`; prevalece sobre la global | sin definir |
 | `DROIDMCP_TLS_CERT` · `DROIDMCP_TLS_KEY` | Cert y clave PEM. Ambas definidas habilitan HTTPS + HSTS | sin definir |
@@ -199,13 +218,14 @@ logging, modelo de amenazas) está en [`docs/security.md`](docs/security.md).
 | `DROIDMCP_NETWORK_ALLOW_PUBLIC` | `mcp-network` | `1` permite objetivos de escaneo fuera de RFC1918 |
 | `DROIDMCP_NETWORK_DB` | `mcp-network` | Ruta del inventario persistente (por defecto `~/.droidmcp/network-devices.json`) |
 | `DROIDMCP_CLIPBOARD_HISTORY_ENTRIES` · `_BYTES` | `mcp-clipboard` | Límites del historial en memoria |
+| `DROIDMCP_MEDIA_FFMPEG` · `DROIDMCP_MEDIA_EXIFTOOL` | `mcp-media` | Rutas explícitas opcionales a los binarios `ffmpeg` / `exiftool` (por defecto: búsqueda en PATH) |
 
 **Salud y autenticación** — `GET /healthz` siempre devuelve `200` y omite la
 autenticación, de modo que un supervisor (systemd, Docker, k8s) pueda sondear sin
 la key. El resto de rutas exige `X-DroidMCP-Key` cuando hay una key configurada; la
 comparación es en tiempo constante. Sin key, la mayoría de servidores registran
 `auth=disabled` y aceptan todas las peticiones — úsalo solo en `localhost`.
-`mcp-termux` y `mcp-filesystem` son excepciones: se niegan a arrancar sin key.
+`mcp-filesystem`, `mcp-termux` y `mcp-media` son excepciones: se niegan a arrancar sin key.
 
 ---
 
@@ -223,6 +243,7 @@ necesarias y ejecuta el binario:
 | termux | `3003` | `droidmcp-termux` | una key |
 | network | `3004` | `droidmcp-network` | — |
 | clipboard | `3005` | `droidmcp-clipboard` | paquete + app `termux-api` |
+| media | `3006` | `droidmcp-media` | `DROIDMCP_ROOT` + una key (`ffmpeg` para transformar) |
 
 **Ejemplo de producción — filesystem con auth y TLS:**
 
@@ -293,8 +314,8 @@ Cambia las URLs a `https://…` cuando `DROIDMCP_TLS_CERT` / `DROIDMCP_TLS_KEY` 
 ```
 DroidMCP/
 ├── cmd/                    # un paquete main por servidor
-│   ├── filesystem/  github/  scraper/
-│   └── termux/  network/  clipboard/
+│   ├── filesystem/  github/  scraper/  termux/
+│   └── network/  clipboard/  media/
 ├── internal/
 │   ├── core/server.go      # wrapper compartido del servidor MCP (HTTP/SSE)
 │   ├── logger/logger.go    # logging estructurado (stderr)
@@ -323,9 +344,9 @@ DroidMCP/
 
 Modelo de amenazas y checklist de producción completos en [`docs/security.md`](docs/security.md). Puntos clave:
 
-- **`mcp-filesystem` y `mcp-termux` no tienen modo dev.** Ambos se niegan a
-  arrancar sin una key, y filesystem exige además `DROIDMCP_ROOT` — un servidor
-  sin configurar nunca cae en el inseguro `/` ni corre sin autenticación.
+- **`mcp-filesystem`, `mcp-termux` y `mcp-media` no tienen modo dev.** Todos se
+  niegan a arrancar sin una key; filesystem y media exigen además `DROIDMCP_ROOT`
+  — un servidor sin configurar nunca cae en el inseguro `/` ni corre sin autenticación.
 - **Dev vs producción.** Los demás servidores aceptan todas las peticiones cuando
   no hay key (el banner registra `auth=disabled`) — pensado solo para una sola
   shell en `localhost`. En cualquier otro escenario, define una key aleatoria y habilita TLS.
@@ -335,8 +356,9 @@ Modelo de amenazas y checklist de producción completos en [`docs/security.md`](
   `mcp-network` bloquea objetivos públicos; anúlalos solo si entiendes las
   implicaciones de SSRF / escaneo.
 - **Seguridad de rutas.** `mcp-filesystem` rechaza rutas absolutas y `..`, resuelve
-  symlinks y re-verifica el confinamiento. No es totalmente a prueba de TOCTOU —
-  evita raíces donde puedan escribir otros procesos no confiables.
+  symlinks y re-verifica el confinamiento — y `mcp-media` aplica las mismas
+  comprobaciones a cada ruta que lee o escribe. No es totalmente a prueba de TOCTOU
+  — evita raíces donde puedan escribir otros procesos no confiables.
 - **Los logs se redactan.** Las claves de atributos que coinciden con `token`,
   `secret`, `password`, `api_key`, `authorization` o `key` se reemplazan por
   `[REDACTED]`; la cabecera `X-DroidMCP-Key` nunca se registra.

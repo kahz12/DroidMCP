@@ -225,7 +225,7 @@ DroidMCP/
 - [x] Complete README in English (includes Claude Code / Gemini CLI integration)
 - [x] Spanish translation of the README (`README.es.md`)
 - [x] Core documentation in `docs/` (`setup-termux.md`, `security.md`)
-- [ ] Dedicated integration guides in `docs/` (currently covered in README)
+- [x] Dedicated usage guides in `docs/` (`usage.md` + `usage.es.md`): full tool-by-tool reference, config, recipes, troubleshooting
 - [ ] Demo video running on real Android device
 - [x] Publish to `awesome-mcp-servers`
 - [x] Publish to `awesome-termux`
@@ -317,7 +317,7 @@ DroidMCP/
 
 ---
 
-### PHASE 11 — mcp-media
+### PHASE 11 — mcp-media [DONE]
 > **Goal:** Manage photos, videos, and audio files on the device
 
 #### MCP Tools
@@ -330,12 +330,13 @@ DroidMCP/
 | `thumbnail`         | Generate thumbnail for a media file          |
 
 #### Tasks
-- [ ] Implement `list_media` by scanning configurable directories for image, video, and audio extensions
-- [ ] Implement `get_metadata` using `exiftool` subprocess or a pure-Go EXIF library
-- [ ] Implement `convert_image` and `thumbnail` via `ffmpeg` or `imagemagick` subprocess
-- [ ] Implement `extract_audio` from video using `ffmpeg -vn`
-- [ ] Validate all input paths against `DROIDMCP_ROOT` to prevent path traversal
-- [ ] Integration into build pipeline (Makefile/scripts)
+- [x] Implement `list_media` by scanning configurable directories for image, video, and audio extensions (recursion + kind filter + `max_results`)
+- [x] Implement `get_metadata` in pure Go (stdlib image dimensions) enriched with `exiftool -json` tags when available
+- [x] Implement `convert_image` and `thumbnail` via `ffmpeg` subprocess (scale filter, JPEG quality mapping, video frame seek)
+- [x] Implement `extract_audio` from video using `ffmpeg -vn` (stream copy by default, optional re-encode)
+- [x] Validate all input paths against `DROIDMCP_ROOT` to prevent path traversal (lexical + symlink-escape checks); server refuses to start without an API key
+- [x] Integration into build pipeline (Makefile / `scripts/build-arm64.sh` / release workflow)
+- [x] Documentation: server tables in both READMEs and a full `### mcp-media` section in `docs/usage.md` + `docs/usage.es.md`
 
 ---
 
