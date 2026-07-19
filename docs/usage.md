@@ -23,6 +23,7 @@ Versión en español: [`usage.es.md`](usage.es.md).
   - [mcp-clipboard](#mcp-clipboard)
   - [mcp-media](#mcp-media)
   - [mcp-sqlite](#mcp-sqlite)
+  - [mcp-sensors](#mcp-sensors)
 - [Recipes](#recipes)
 - [Troubleshooting](#troubleshooting)
 
@@ -128,6 +129,7 @@ the binaries at device boot. A convention that matches the rest of the docs:
 | clipboard | `3005` | `droidmcp-clipboard` |
 | media | `3006` | `droidmcp-media` |
 | sqlite | `3007` | `droidmcp-sqlite` |
+| sensors | `3008` | `droidmcp-sensors` |
 
 ---
 
@@ -718,6 +720,52 @@ and the destination must differ from the source database.
 
 ---
 
+### mcp-sensors
+
+Read-only access to device sensors and status through Termux:API. Every tool
+needs the `termux-api` package (`pkg install termux-api`) plus the Termux:API
+Android app; a missing piece surfaces as an install hint. Nothing on the device
+is modified, so — like `mcp-clipboard` — the server allows key-less dev mode on
+localhost (set `DROIDMCP_SENSORS_KEY` or `DROIDMCP_API_KEY` to require auth).
+Location data is privacy-sensitive: prefer running this server with a key.
+
+Successful calls pass the Termux:API JSON through verbatim; failed calls return
+the full run record (`stdout`, `stderr`, `exit_code`, `timed_out`). Every tool
+accepts `timeout_seconds` (default 15s — 30s for `get_location` — max 120s).
+
+**`get_battery`** — battery status via `termux-battery-status`. Returns the
+API's JSON: `health`, `percentage`, `plugged`, `status`, `temperature`,
+`current`.
+
+**`get_location`** — device location via `termux-location`. Returns the API's
+JSON: `latitude`, `longitude`, `altitude`, `accuracy`, `bearing`, `speed`,
+`provider`. A fresh GPS fix can take tens of seconds indoors; `request: "last"`
+returns the cached fix immediately.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `provider` | string | no | `network` | `gps`, `network`, or `passive`. |
+| `request` | string | no | `once` | `once` (fresh fix) or `last` (cached, immediate). `updates` is rejected: it streams forever. |
+| `timeout_seconds` | number | no | `30` | Per-call timeout. Max `120`. |
+
+**`get_wifi_info`** — current WiFi connection via `termux-wifi-connectioninfo`.
+Returns the API's JSON: SSID, BSSID, IP, link speed, RSSI, frequency.
+
+**`get_brightness`** — screen brightness. Termux:API has no brightness getter
+(`termux-brightness` only sets), so this reads the Android settings provider and
+returns `{brightness (0-255), auto, source}`. On devices that restrict the
+settings provider the tool errors with an explanation instead of guessing.
+
+**`get_volume`** — volume of every audio stream via `termux-volume`. Returns
+the API's JSON array: `[{stream, volume, max_volume}, …]`.
+
+**`list_sensors`** — availability report plus hardware inventory. Returns
+`{tools: {<tool>: {backend, available}}, hardware}` where `hardware` is the
+`termux-sensor -l` sensor list when that wrapper is present (a `hardware_error`
+string explains its absence otherwise; the availability map is still returned).
+
+---
+
 ## Recipes
 
 **Read a large log in pages.** `read_file` refuses to buffer a file over
@@ -777,6 +825,8 @@ with `export_csv`.
 | `mcp-media` transform fails with an `ffmpeg not found` hint | `convert_image`/`thumbnail`/`extract_audio` need ffmpeg. Run `pkg install ffmpeg`, or set `DROIDMCP_MEDIA_FFMPEG` to its path. |
 | `mcp-sqlite` returns `database … does not exist; call open_db first` | Only `open_db` creates a database; `query`/`execute`/etc. require an existing file. Call `open_db` (or fix the path). |
 | `mcp-sqlite` `query` returns `query only runs read statements` | A write statement was sent to `query`. Use `execute` for `INSERT`/`UPDATE`/`DELETE`/DDL. |
+| `mcp-sensors` `get_brightness` errors with `cannot read screen brightness` | The device restricts the Android settings provider (Termux:API cannot read brightness at all). The other sensor tools are unaffected. |
+| `mcp-sensors` `get_location` times out | A fresh GPS fix needs sky view and can exceed the timeout. Use `request: "last"` for the cached fix, `provider: "network"` for a coarse one, or raise `timeout_seconds`. |
 | Can't reach a server from another machine | By design: the listener is bound to `127.0.0.1`. Front it with a reverse proxy or port-forward, and read [`security.md`](security.md) before exposing it. |
 
 For anything security-related — exposure, keys, TLS, the full threat model —

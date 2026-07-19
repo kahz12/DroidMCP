@@ -25,6 +25,7 @@ de producción, ver [`security.md`](security.md). Versión en inglés:
   - [mcp-clipboard](#mcp-clipboard)
   - [mcp-media](#mcp-media)
   - [mcp-sqlite](#mcp-sqlite)
+  - [mcp-sensors](#mcp-sensors)
 - [Recetas](#recetas)
 - [Resolución de problemas](#resolución-de-problemas)
 
@@ -135,6 +136,7 @@ el resto de la documentación:
 | clipboard | `3005` | `droidmcp-clipboard` |
 | media | `3006` | `droidmcp-media` |
 | sqlite | `3007` | `droidmcp-sqlite` |
+| sensors | `3008` | `droidmcp-sensors` |
 
 ---
 
@@ -738,6 +740,57 @@ datos preexistentes, y el destino debe diferir de la base de datos origen.
 
 ---
 
+### mcp-sensors
+
+Acceso de solo lectura a los sensores y el estado del dispositivo vía
+Termux:API. Todas las tools necesitan el paquete `termux-api`
+(`pkg install termux-api`) más la app Android Termux:API; si falta una pieza,
+el error incluye la pista de instalación. Nada del dispositivo se modifica, así
+que — como `mcp-clipboard` — el servidor permite modo dev sin key en localhost
+(define `DROIDMCP_SENSORS_KEY` o `DROIDMCP_API_KEY` para exigir autenticación).
+La ubicación es un dato sensible: es preferible correr este servidor con key.
+
+Las llamadas exitosas pasan el JSON de Termux:API tal cual; las fallidas
+devuelven el registro completo de la ejecución (`stdout`, `stderr`,
+`exit_code`, `timed_out`). Todas las tools aceptan `timeout_seconds` (por
+defecto 15 s — 30 s en `get_location` — máx 120 s).
+
+**`get_battery`** — estado de la batería vía `termux-battery-status`. Devuelve
+el JSON de la API: `health`, `percentage`, `plugged`, `status`, `temperature`,
+`current`.
+
+**`get_location`** — ubicación del dispositivo vía `termux-location`. Devuelve
+el JSON de la API: `latitude`, `longitude`, `altitude`, `accuracy`, `bearing`,
+`speed`, `provider`. Un fix GPS fresco puede tardar decenas de segundos en
+interiores; `request: "last"` devuelve el fix cacheado de inmediato.
+
+| Argumento | Tipo | Requerido | Default | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `provider` | string | no | `network` | `gps`, `network` o `passive`. |
+| `request` | string | no | `once` | `once` (fix fresco) o `last` (cacheado, inmediato). `updates` se rechaza: emite fixes para siempre. |
+| `timeout_seconds` | number | no | `30` | Timeout por llamada. Máx `120`. |
+
+**`get_wifi_info`** — conexión WiFi actual vía `termux-wifi-connectioninfo`.
+Devuelve el JSON de la API: SSID, BSSID, IP, velocidad de enlace, RSSI,
+frecuencia.
+
+**`get_brightness`** — brillo de pantalla. Termux:API no tiene getter de brillo
+(`termux-brightness` solo escribe), así que esta tool lee el proveedor de
+ajustes de Android y devuelve `{brightness (0-255), auto, source}`. En
+dispositivos que restringen el proveedor de ajustes, la tool devuelve un error
+explicativo en lugar de adivinar.
+
+**`get_volume`** — volumen de todos los streams de audio vía `termux-volume`.
+Devuelve el array JSON de la API: `[{stream, volume, max_volume}, …]`.
+
+**`list_sensors`** — informe de disponibilidad más inventario hardware.
+Devuelve `{tools: {<tool>: {backend, available}}, hardware}` donde `hardware`
+es la lista de sensores de `termux-sensor -l` cuando ese wrapper está presente
+(si no, un string `hardware_error` explica su ausencia; el mapa de
+disponibilidad se devuelve igualmente).
+
+---
+
 ## Recetas
 
 **Leer un log grande por páginas.** `read_file` se niega a bufferizar de una vez
@@ -801,6 +854,8 @@ instantánea a otra tool con `export_csv`.
 | Una transformación de `mcp-media` falla con una pista `ffmpeg not found` | `convert_image`/`thumbnail`/`extract_audio` necesitan ffmpeg. Ejecuta `pkg install ffmpeg`, o define `DROIDMCP_MEDIA_FFMPEG` con su ruta. |
 | `mcp-sqlite` devuelve `database … does not exist; call open_db first` | Solo `open_db` crea una base de datos; `query`/`execute`/etc. requieren un archivo existente. Llama a `open_db` (o corrige la ruta). |
 | `mcp-sqlite` `query` devuelve `query only runs read statements` | Se envió una sentencia de escritura a `query`. Usa `execute` para `INSERT`/`UPDATE`/`DELETE`/DDL. |
+| `mcp-sensors` `get_brightness` falla con `cannot read screen brightness` | El dispositivo restringe el proveedor de ajustes de Android (Termux:API no puede leer el brillo en absoluto). Las demás tools de sensores no se ven afectadas. |
+| `mcp-sensors` `get_location` agota el timeout | Un fix GPS fresco necesita vista al cielo y puede exceder el timeout. Usa `request: "last"` para el fix cacheado, `provider: "network"` para uno aproximado, o sube `timeout_seconds`. |
 | No puedes alcanzar un servidor desde otra máquina | Es por diseño: el listener está enlazado a `127.0.0.1`. Ponle delante un proxy inverso o un reenvío de puertos, y lee [`security.md`](security.md) antes de exponerlo. |
 
 Para cualquier cosa relacionada con seguridad — exposición, keys, TLS, el modelo

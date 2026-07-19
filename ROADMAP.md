@@ -359,7 +359,7 @@ DroidMCP/
 
 ---
 
-### PHASE 13 — mcp-sensors
+### PHASE 13 — mcp-sensors [DONE]
 > **Goal:** Access Android hardware sensors for IoT and automation use cases
 
 #### MCP Tools
@@ -373,12 +373,13 @@ DroidMCP/
 | `list_sensors`      | List all available hardware sensors          |
 
 #### Tasks
-- [ ] Implement `get_battery` via `termux-battery-status` returning level, status, and health
-- [ ] Implement `get_location` via `termux-location` with configurable provider (gps/network/passive)
-- [ ] Implement `get_wifi_info` via `termux-wifi-connectioninfo` returning SSID, signal, and IP
-- [ ] Implement `get_brightness` and `get_volume` via `termux-brightness` and `termux-volume`
-- [ ] Implement `list_sensors` aggregating availability of each sensor tool
-- [ ] Integration into build pipeline (Makefile/scripts)
+- [x] Implement `get_battery` via `termux-battery-status` returning level, status, and health
+- [x] Implement `get_location` via `termux-location` with configurable provider (gps/network/passive) and request kind (once/last)
+- [x] Implement `get_wifi_info` via `termux-wifi-connectioninfo` returning SSID, signal, and IP
+- [x] Implement `get_brightness` and `get_volume` — volume via `termux-volume`; brightness read from the Android settings provider (`termux-brightness` is set-only), best-effort with a clear error when restricted
+- [x] Implement `list_sensors` aggregating availability of each sensor tool plus the hardware inventory from `termux-sensor -l`
+- [x] Integration into build pipeline (Makefile / `scripts/build-arm64.sh` / release workflow)
+- [x] Documentation: server tables in both READMEs and a full `### mcp-sensors` section in `docs/usage.md` + `docs/usage.es.md`
 
 ---
 

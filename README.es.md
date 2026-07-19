@@ -21,22 +21,24 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 
 ## De un vistazo
 
-| Cero dependencias | Seguro por defecto | Ocho servidores enfocados |
+| Cero dependencias | Seguro por defecto | Nueve servidores enfocados |
 |:---|:---|:---|
-| Un binario ARM64 estático por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios y SQLite — cada uno tras una superficie de tools pequeña y auditable. |
+| Un binario ARM64 estático por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios, SQLite y sensores del dispositivo — cada uno tras una superficie de tools pequeña y auditable. |
 
 ```
-          Claude Code · Gemini CLI · cualquier cliente MCP
-                                 │
-                                 │  Protocolo MCP sobre HTTP/SSE
-                                 ▼
-       ┌───────────────────────────────────────────────────┐
-       │             DroidMCP — Termux · ARM64             │
-       ├────────────┬────────────┬────────────┬────────────┤
-       │ filesystem │   github   │  scraper   │   termux   │
-       ├────────────┼────────────┼────────────┼────────────┤
-       │  network   │ clipboard  │   media    │   sqlite   │
-       └────────────┴────────────┴────────────┴────────────┘
+   Claude Code · Gemini CLI · cualquier cliente MCP
+                          │
+                          │  Protocolo MCP sobre HTTP/SSE
+                          ▼
+       ┌──────────────────────────────────────┐
+       │      DroidMCP — Termux · ARM64       │
+       ├────────────┬────────────┬────────────┤
+       │ filesystem │   github   │  scraper   │
+       ├────────────┼────────────┼────────────┤
+       │   termux   │  network   │ clipboard  │
+       ├────────────┼────────────┼────────────┤
+       │   media    │   sqlite   │  sensors   │
+       └────────────┴────────────┴────────────┘
 ```
 
 ## Servidores
@@ -51,6 +53,7 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 | `mcp-clipboard` | `3005` | Puente del portapapeles de Android vía Termux:API | `termux-api` |
 | `mcp-media` | `3006` | Navegación de medios y transformaciones con `ffmpeg` | `DROIDMCP_ROOT` + key |
 | `mcp-sqlite` | `3007` | Bases de datos SQLite locales, Go puro — sin CGO | `DROIDMCP_ROOT` + key |
+| `mcp-sensors` | `3008` | Sensores del dispositivo: batería, ubicación, WiFi, brillo, volumen | `termux-api` |
 
 Despliega un servidor para ver su lista de tools; la referencia completa por
 tool, con argumentos y ejemplos, está en la [guía de uso](docs/usage.es.md).
@@ -190,6 +193,26 @@ Basado en `modernc.org/sqlite`; las bases de datos son archivos bajo
 
 </details>
 
+<details>
+<summary><b>mcp-sensors</b> — sensores y estado del dispositivo, solo lectura (requiere Termux:API)</summary>
+<br>
+
+Requiere el paquete `termux-api` y la app Android Termux:API. Todas las tools son
+de solo lectura; los resultados pasan el JSON de la API tal cual.
+`get_brightness` lee el proveedor de ajustes de Android (Termux:API no tiene
+getter de brillo) y puede no estar disponible en algunos dispositivos.
+
+| Tool | Descripción |
+|------|-------------|
+| `get_battery` | Nivel de batería, estado de carga, salud, temperatura |
+| `get_location` | Ubicación GPS/network/passive; `last` devuelve el último fix cacheado |
+| `get_wifi_info` | Conexión WiFi actual: SSID, IP, velocidad de enlace, RSSI |
+| `get_brightness` | Nivel de brillo de pantalla y modo auto-brillo |
+| `get_volume` | Volumen de todos los streams de audio |
+| `list_sensors` | Disponibilidad de las tools más el inventario de sensores hardware |
+
+</details>
+
 ## Inicio rápido
 
 **Desde una release** — cada release incluye un binario por servidor más un
@@ -296,7 +319,7 @@ El modelo de amenazas completo y el checklist de producción están en
 
 ```
 cmd/<servidor>/     un paquete main por servidor (filesystem, github, scraper,
-                    termux, network, clipboard, media, sqlite)
+                    termux, network, clipboard, media, sqlite, sensors)
 internal/           core — servidor HTTP/SSE compartido · config · logger · buildinfo
 docs/               guía de uso (EN/ES) · seguridad · puesta a punto de Termux
 scripts/            compilación cruzada ARM64 reproducible

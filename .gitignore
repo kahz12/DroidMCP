@@ -9,6 +9,7 @@ bin/
 /clipboard
 /media
 /sqlite
+/sensors
 *.exe
 *.exe~
 *.dll
