@@ -2,53 +2,62 @@
 
 # DroidMCP
 
-**Native Model Context Protocol servers for Android and Termux.**
+**Native Model Context Protocol servers for Android and Termux**
 
-Single-binary MCP servers written in Go. ARM64-native, zero runtime dependencies — no Node.js, no Python, no interpreter to install.
+Self-contained Go binaries that give any MCP client — Claude Code, Gemini CLI, or your own —
+hands on an Android device. No Node.js, no Python, no runtime to install.
 
-[![Build and Release](https://github.com/kahz12/DroidMCP/actions/workflows/build.yml/badge.svg)](https://github.com/kahz12/DroidMCP/actions/workflows/build.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8.svg?logo=go&logoColor=white)](go.mod)
-[![Platform](https://img.shields.io/badge/platform-Android%20%C2%B7%20Termux-3DDC84.svg?logo=android&logoColor=white)](https://termux.dev)
-[![Arch](https://img.shields.io/badge/arch-ARM64-555.svg)](scripts/build-arm64.sh)
+[![CI](https://img.shields.io/github/actions/workflow/status/kahz12/DroidMCP/build.yml?branch=main&style=flat-square&label=CI)](https://github.com/kahz12/DroidMCP/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/kahz12/DroidMCP?style=flat-square)](https://github.com/kahz12/DroidMCP/releases/latest)
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
+[![Platform](https://img.shields.io/badge/Android%20%C2%B7%20Termux-ARM64-3DDC84?style=flat-square&logo=android&logoColor=white)](https://termux.dev)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
-[English](README.md) · [Español](README.es.md) · [Usage](docs/usage.md) · [Roadmap](ROADMAP.md) · [Security](docs/security.md)
+[English](README.md) · [Español](README.es.md) · [Usage Guide](docs/usage.md) · [Security](docs/security.md) · [Roadmap](ROADMAP.md)
 
 </div>
 
 ---
 
-## Overview
+## At a glance
 
-DroidMCP is a monorepo of MCP servers built to run natively on Android through Termux. Each server exposes a focused set of tools over HTTP/SSE that any MCP-compatible client — Claude Code, Gemini CLI, or your own — can consume directly.
+| Zero dependencies | Secure by default | Eight focused servers |
+|:---|:---|:---|
+| One static ARM64 binary per server, pure Go — no CGO, no interpreter, nothing else to install. | Loopback-only listener, API-key auth, optional TLS, sandboxed roots, redacted logs, signed releases. | Files, GitHub, web scraping, shell, LAN, clipboard, media, and SQLite — each behind a small, auditable tool surface. |
 
 ```
-   Claude Code / Gemini CLI / Any MCP Client
-                     │
-                     │  HTTP/SSE (MCP Protocol)
-                     ▼
-              DroidMCP Server          runs in Termux (Android)
-                     │
-   ┌────────────┬────────────┬──────────┬────────────┬────────────┬────────┐
-   ▼            ▼            ▼          ▼            ▼            ▼        ▼
-filesystem   github      scraper    termux      network     clipboard   media
+             Claude Code · Gemini CLI · any MCP client
+                                 │
+                                 │  MCP protocol over HTTP/SSE
+                                 ▼
+       ┌───────────────────────────────────────────────────┐
+       │             DroidMCP — Termux · ARM64             │
+       ├────────────┬────────────┬────────────┬────────────┤
+       │ filesystem │   github   │  scraper   │   termux   │
+       ├────────────┼────────────┼────────────┼────────────┤
+       │  network   │ clipboard  │   media    │   sqlite   │
+       └────────────┴────────────┴────────────┴────────────┘
 ```
 
 ## Servers
 
-| Server | Focus | Default port |
-|--------|-------|:---:|
-| `mcp-filesystem` | Sandboxed file operations with path-traversal protection | `3000` |
-| `mcp-github` | Full GitHub API access via Personal Access Token | `3001` |
-| `mcp-scraper` | Chromium-free web scraping and extraction | `3002` |
-| `mcp-termux` | Shell execution and package management | `3003` |
-| `mcp-network` | LAN discovery and port scanning | `3004` |
-| `mcp-clipboard` | Android clipboard bridge via Termux:API | `3005` |
-| `mcp-media` | Media browsing and `ffmpeg`-based transforms | `3006` |
-| `mcp-sqlite` | Local SQLite databases (pure-Go, no CGO) | `3007` |
+| Server | Port | Focus | Requires |
+|--------|:---:|-------|----------|
+| `mcp-filesystem` | `3000` | Sandboxed file operations with path-traversal protection | `DROIDMCP_ROOT` + key |
+| `mcp-github` | `3001` | Full GitHub API via Personal Access Token | `GITHUB_TOKEN` |
+| `mcp-scraper` | `3002` | Chromium-free web scraping and extraction | — |
+| `mcp-termux` | `3003` | Shell execution and package management | key |
+| `mcp-network` | `3004` | LAN discovery and port scanning | — |
+| `mcp-clipboard` | `3005` | Android clipboard bridge via Termux:API | `termux-api` |
+| `mcp-media` | `3006` | Media browsing and `ffmpeg`-based transforms | `DROIDMCP_ROOT` + key |
+| `mcp-sqlite` | `3007` | Local SQLite databases, pure Go — no CGO | `DROIDMCP_ROOT` + key |
 
-<details open>
+Expand a server for its tool list; the full per-tool reference, with arguments and
+examples, lives in the [usage guide](docs/usage.md).
+
+<details>
 <summary><b>mcp-filesystem</b> — secure file operations within a configurable root</summary>
+<br>
 
 | Tool | Description |
 |------|-------------|
@@ -66,26 +75,24 @@ filesystem   github      scraper    termux      network     clipboard   media
 
 <details>
 <summary><b>mcp-github</b> — full GitHub operations, built on <code>google/go-github</code></summary>
+<br>
 
 | Tool | Description |
 |------|-------------|
-| `list_repos` | List repositories for the authenticated user |
-| `get_repo` | Get detailed repository metadata |
+| `list_repos` · `get_repo` · `fork_repo` | Browse and fork repositories |
 | `list_branches` · `list_tags` · `list_releases` | List repository refs and releases |
 | `list_commits` · `get_commit` | Browse commit history and details |
-| `fork_repo` | Fork a repository |
 | `create_issue` · `list_issues` | Open and list issues (filterable by state) |
 | `comment_issue` · `close_issue` · `label_issue` | Manage existing issues |
-| `get_file` | Read a file from a repository (auto-decodes Base64) |
-| `get_pr` · `create_pr` | Read and open pull requests |
-| `review_pr` · `merge_pr` | Review and merge pull requests |
-| `commit_file` | Create or update a file via the Content API |
+| `get_file` · `commit_file` | Read and write repository files via the Content API |
+| `get_pr` · `create_pr` · `review_pr` · `merge_pr` | Full pull-request lifecycle |
 | `search_code` · `search_issues` | Search code and issues across GitHub |
 
 </details>
 
 <details>
 <summary><b>mcp-scraper</b> — lightweight scraping on <code>colly</code> + <code>goquery</code>, no Chromium</summary>
+<br>
 
 | Tool | Description |
 |------|-------------|
@@ -100,12 +107,12 @@ filesystem   github      scraper    termux      network     clipboard   media
 
 <details>
 <summary><b>mcp-termux</b> — direct interaction with the Termux environment</summary>
+<br>
 
 | Tool | Description |
 |------|-------------|
-| `run_command` | Execute a shell command |
-| `install_pkg` | Install a package via `pkg install` |
-| `list_pkgs` | List installed packages |
+| `run_command` | Execute a shell command (allowlist-restrictable) |
+| `install_pkg` · `list_pkgs` | Package management via `pkg` |
 | `read_env` | Read one or all environment variables |
 | `get_storage` | Storage usage for home, prefix, and shared storage |
 | `termux_battery_status` · `termux_location` | Device status via Termux:API |
@@ -116,6 +123,7 @@ filesystem   github      scraper    termux      network     clipboard   media
 
 <details>
 <summary><b>mcp-network</b> — LAN discovery via concurrent TCP probes</summary>
+<br>
 
 | Tool | Description |
 |------|-------------|
@@ -124,17 +132,16 @@ filesystem   github      scraper    termux      network     clipboard   media
 | `nslookup` · `reverse_dns` | Forward and reverse DNS lookups |
 | `traceroute` | Trace the path to a host (no root, via `tracepath`) |
 | `network_info` | Gateway, DNS servers, interfaces, detected subnet |
-| `list_devices` | List devices from previous scans (persistent inventory) |
-| `get_device_info` | Details for one known device by IP or MAC |
+| `list_devices` · `get_device_info` | Persistent device inventory from previous scans |
 
 </details>
 
 <details>
 <summary><b>mcp-clipboard</b> — Android clipboard bridge (requires Termux:API)</summary>
+<br>
 
-> Requires the `termux-api` package (`pkg install termux-api`) **and** the
-> [Termux:API](https://wiki.termux.com/wiki/Termux:API) Android app. Without them
-> the tools fail with a hint explaining which step is missing.
+Requires the `termux-api` package and the [Termux:API](https://wiki.termux.com/wiki/Termux:API)
+Android app; without them the tools fail with a hint explaining which step is missing.
 
 | Tool | Description |
 |------|-------------|
@@ -147,11 +154,11 @@ filesystem   github      scraper    termux      network     clipboard   media
 
 <details>
 <summary><b>mcp-media</b> — media browsing and transforms within a configurable root</summary>
+<br>
 
-> Conversion, thumbnails, and audio extraction shell out to `ffmpeg`
-> (`pkg install ffmpeg`); `get_metadata` is enriched by `exiftool` when it is
-> installed. Listing and image dimensions need no external tools. Like
-> `mcp-filesystem`, this server requires `DROIDMCP_ROOT` and a key.
+Listing and image dimensions are pure Go; conversion, thumbnails, and audio
+extraction shell out to `ffmpeg`, and `get_metadata` is enriched by `exiftool`
+when installed.
 
 | Tool | Description |
 |------|-------------|
@@ -164,12 +171,12 @@ filesystem   github      scraper    termux      network     clipboard   media
 </details>
 
 <details>
-<summary><b>mcp-sqlite</b> — local SQLite databases, pure-Go (no CGO)</summary>
+<summary><b>mcp-sqlite</b> — local SQLite databases, pure Go (no CGO)</summary>
+<br>
 
-> Backed by `modernc.org/sqlite`, so the binary stays a single dependency-free
-> ARM64 file — no `libsqlite3`, no CGO. Databases are files under `DROIDMCP_ROOT`;
-> like `mcp-filesystem`, this server requires `DROIDMCP_ROOT` and a key. All values
-> are bound as parameters, so `?` placeholders keep statements injection-safe.
+Backed by `modernc.org/sqlite`; databases are files under `DROIDMCP_ROOT`, and
+every value is bound as a parameter — `?` placeholders keep statements
+injection-safe.
 
 | Tool | Description |
 |------|-------------|
@@ -182,119 +189,67 @@ filesystem   github      scraper    termux      network     clipboard   media
 
 </details>
 
----
+## Quick start
 
-## Installation
-
-**Prerequisites** — an Android device with [Termux](https://f-droid.org/en/packages/com.termux/) (F-Droid build recommended), plus Go, Git, and Make:
-
-```bash
-pkg update && pkg upgrade
-pkg install golang git make
-```
-
-**Build from source:**
+**From a release** — each release ships one binary per server plus a signed
+`SHA256SUMS` ([verification details](docs/security.md)):
 
 ```bash
-git clone https://github.com/kahz12/DroidMCP
-cd DroidMCP
-make build            # binaries land in bin/
-make install          # optional: copy to $PREFIX/bin (global)
-make build-arm64      # cross-compile from another machine
+curl -LO https://github.com/kahz12/DroidMCP/releases/latest/download/droidmcp-filesystem
+curl -LO https://github.com/kahz12/DroidMCP/releases/latest/download/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+chmod +x droidmcp-filesystem && mv droidmcp-filesystem "$PREFIX/bin/"
 ```
 
-`make build` produces one binary per server in `bin/`: `droidmcp-filesystem`,
-`droidmcp-github`, `droidmcp-scraper`, `droidmcp-termux`, `droidmcp-network`,
-`droidmcp-clipboard`, `droidmcp-media`, `droidmcp-sqlite`.
+**From source** — on the device ([Termux](https://f-droid.org/en/packages/com.termux/), F-Droid build) or cross-compiled:
 
----
+```bash
+pkg install golang git make          # prerequisites
+git clone https://github.com/kahz12/DroidMCP && cd DroidMCP
+make build                           # bin/droidmcp-<server>, one per server
+make install                         # optional: copy into $PREFIX/bin
+```
+
+**Run** — export the server's requirements and start the binary; the MCP stream
+is served at `http://localhost:<port>/sse`:
+
+```bash
+export DROIDMCP_API_KEY="$(openssl rand -base64 32)"
+export DROIDMCP_ROOT="$HOME/workspace"     # never leave this at "/"
+
+DROIDMCP_PORT=3000 droidmcp-filesystem
+```
+
+```bash
+curl -fsS http://localhost:3000/healthz
+# {"status":"ok","server":"mcp-filesystem","version":"v0.2.0"}
+```
 
 ## Configuration
 
-All servers read environment variables prefixed with `DROIDMCP_`. The table below
-is a quick reference; the full operational guide (auth, TLS, logging, threat model)
-lives in [`docs/security.md`](docs/security.md).
-
-**Core — every server:**
+Every knob is an environment variable prefixed with `DROIDMCP_`. Shared by all
+servers:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DROIDMCP_PORT` | TCP port the SSE listener binds to | `3000` |
-| `DROIDMCP_ROOT` | Filesystem root, validated at startup. **Required by `mcp-filesystem`, `mcp-media`, and `mcp-sqlite`.** | `/` (ignored by other servers) |
-| `DROIDMCP_API_KEY` | Global key. If set, every request must carry `X-DroidMCP-Key` | unset (dev mode) |
-| `DROIDMCP_<SERVER>_KEY` | Per-server override, e.g. `DROIDMCP_TERMUX_KEY`; wins over the global key | unset |
-| `DROIDMCP_TLS_CERT` · `DROIDMCP_TLS_KEY` | PEM cert and key. Both set enables HTTPS + HSTS | unset |
-| `DROIDMCP_LOG_LEVEL` | `debug` · `info` · `warn` · `error` | `info` |
-| `DROIDMCP_LOG_FORMAT` | `json` for structured logs, otherwise text | `text` |
+| `DROIDMCP_ROOT` | Filesystem root, validated at startup — required by `filesystem`, `media`, `sqlite` | — |
+| `DROIDMCP_API_KEY` | Global key; if set, every request must carry `X-DroidMCP-Key` | unset |
+| `DROIDMCP_<SERVER>_KEY` | Per-server key, e.g. `DROIDMCP_TERMUX_KEY`; wins over the global key | unset |
+| `DROIDMCP_TLS_CERT` · `DROIDMCP_TLS_KEY` | PEM cert and key; both set enables HTTPS + HSTS | unset |
+| `DROIDMCP_LOG_LEVEL` · `DROIDMCP_LOG_FORMAT` | `debug`–`error` · `json` or text | `info` · text |
 
-**Per-server:**
+Per-server variables — GitHub tokens, the `run_command` allowlist, SSRF and
+scan-target opt-ins, history caps, `ffmpeg`/`exiftool` paths — are documented in
+the [usage guide](docs/usage.md#configuration-reference).
 
-| Variable | Used by | Description |
-|----------|---------|-------------|
-| `GITHUB_TOKEN` · `GITHUB_APP_TOKEN` · `GITHUB_FINE_GRAINED_TOKEN` | `mcp-github` | Required; first one set is used |
-| `DROIDMCP_MAX_READ_BYTES` | `mcp-filesystem` | Per-read buffer cap (default 10 MiB); page larger files with `offset`/`length` |
-| `DROIDMCP_TERMUX_ALLOWLIST` | `mcp-termux` | Comma-separated `run_command` allowlist (empty = allow all) |
-| `DROIDMCP_SCRAPER_ALLOW_PRIVATE` | `mcp-scraper` | `1` allows RFC1918/loopback URLs (off by default, SSRF safety) |
-| `DROIDMCP_NETWORK_ALLOW_PUBLIC` | `mcp-network` | `1` allows non-RFC1918 scan targets |
-| `DROIDMCP_NETWORK_DB` | `mcp-network` | Persistent device inventory path (default `~/.droidmcp/network-devices.json`) |
-| `DROIDMCP_CLIPBOARD_HISTORY_ENTRIES` · `_BYTES` | `mcp-clipboard` | In-memory history caps |
-| `DROIDMCP_MEDIA_FFMPEG` · `DROIDMCP_MEDIA_EXIFTOOL` | `mcp-media` | Optional explicit paths to the `ffmpeg` / `exiftool` binaries (default: PATH lookup) |
+`GET /healthz` always answers without auth so supervisors can probe liveness;
+every other route requires the key when one is configured, compared in constant
+time.
 
-**Health and auth** — `GET /healthz` always returns `200` and bypasses auth so a
-supervisor (systemd, Docker, k8s) can probe without the key. Every other route
-requires `X-DroidMCP-Key` when a key is configured; comparison is constant-time.
-With no key, most servers log `auth=disabled` and accept every request — use only
-on `localhost`. `mcp-filesystem`, `mcp-termux`, `mcp-media`, and `mcp-sqlite` are
-exceptions: they refuse to start without a key.
+## Client integration
 
----
-
-## Usage
-
-Each server binds an HTTP/SSE listener; the stream is served at
-`http://localhost:<port>/sse`. Set `DROIDMCP_PORT`, export any required variables,
-and run the binary:
-
-| Server | Port | Command | Required environment |
-|--------|:---:|---------|----------------------|
-| filesystem | `3000` | `droidmcp-filesystem` | `DROIDMCP_ROOT` + a key |
-| github | `3001` | `droidmcp-github` | `GITHUB_TOKEN` |
-| scraper | `3002` | `droidmcp-scraper` | — |
-| termux | `3003` | `droidmcp-termux` | a key |
-| network | `3004` | `droidmcp-network` | — |
-| clipboard | `3005` | `droidmcp-clipboard` | `termux-api` package + app |
-| media | `3006` | `droidmcp-media` | `DROIDMCP_ROOT` + a key (`ffmpeg` for transforms) |
-| sqlite | `3007` | `droidmcp-sqlite` | `DROIDMCP_ROOT` + a key |
-
-**Production example — filesystem with auth and TLS:**
-
-```bash
-export DROIDMCP_API_KEY="$(openssl rand -base64 32)"   # or per-server DROIDMCP_<NAME>_KEY
-export DROIDMCP_TLS_CERT=/etc/droidmcp/cert.pem        # required for non-loopback exposure
-export DROIDMCP_TLS_KEY=/etc/droidmcp/key.pem
-export DROIDMCP_ROOT=/srv/droidmcp/workspace           # never leave this at "/"
-export DROIDMCP_LOG_FORMAT=json                        # structured logs for shipping
-
-droidmcp-filesystem
-```
-
-Supervisors probe health without the key; clients pass the key in the header:
-
-```bash
-curl -fsS https://localhost:3000/healthz
-# {"status":"ok","server":"mcp-filesystem","version":"dev"}
-
-curl -H "X-DroidMCP-Key: $DROIDMCP_API_KEY" https://localhost:3000/sse
-```
-
-> `version` is `dev` for local builds; release binaries report the git tag.
-
----
-
-## Client Integration
-
-**Claude Code** — add the servers to `~/.claude/settings.json`, including the
-`X-DroidMCP-Key` header when a key is set:
+**Claude Code** — `~/.claude/settings.json`:
 
 ```json
 {
@@ -302,103 +257,64 @@ curl -H "X-DroidMCP-Key: $DROIDMCP_API_KEY" https://localhost:3000/sse
     "filesystem": {
       "type": "sse",
       "url": "http://localhost:3000/sse",
-      "headers": { "X-DroidMCP-Key": "<paste-the-key>" }
-    },
-    "github": {
-      "type": "sse",
-      "url": "http://localhost:3001/sse",
-      "headers": { "X-DroidMCP-Key": "<paste-the-key>" }
+      "headers": { "X-DroidMCP-Key": "<your-key>" }
     }
   }
 }
 ```
 
-**Gemini CLI** — same endpoint and header, `uri` instead of `url`:
-
-```json
-{
-  "mcpServers": {
-    "filesystem": {
-      "uri": "http://localhost:3000/sse",
-      "headers": { "X-DroidMCP-Key": "<paste-the-key>" }
-    }
-  }
-}
-```
-
-Switch URLs to `https://…` once `DROIDMCP_TLS_CERT` / `DROIDMCP_TLS_KEY` are set.
-
----
-
-## Project Structure
-
-```
-DroidMCP/
-├── cmd/                    # one main package per server
-│   ├── filesystem/  github/  scraper/  termux/
-│   └── network/  clipboard/  media/
-├── internal/
-│   ├── core/server.go      # shared MCP server wrapper (HTTP/SSE)
-│   ├── logger/logger.go    # structured logging (stderr)
-│   └── config/config.go    # environment-based configuration
-├── scripts/build-arm64.sh  # cross-compilation
-├── docs/                   # setup-termux.md · security.md
-├── .github/workflows/      # build.yml — CI: build + release on tag
-└── Makefile · go.mod · go.sum
-```
-
-## Tech Stack
-
-| Component | Technology |
-|-----------|------------|
-| Language | Go 1.26 |
-| MCP transport | HTTP/SSE |
-| MCP SDK | [mark3labs/mcp-go](https://github.com/mark3labs/mcp-go) |
-| GitHub client | [google/go-github](https://github.com/google/go-github) |
-| Web scraping | [gocolly/colly](https://github.com/gocolly/colly) + [goquery](https://github.com/PuerkitoBio/goquery) |
-| Configuration | [spf13/viper](https://github.com/spf13/viper) |
-| Build target | `GOOS=linux GOARCH=arm64` |
-
----
+**Gemini CLI** — same endpoint and header, with `uri` in place of `url`. Switch
+to `https://…` once TLS is configured.
 
 ## Security
 
-Full threat model and production checklist in [`docs/security.md`](docs/security.md). Highlights:
+The full threat model and production checklist live in
+[`docs/security.md`](docs/security.md). The short version:
 
-- **`mcp-filesystem`, `mcp-termux`, `mcp-media`, and `mcp-sqlite` have no dev mode.**
-  All refuse to start without an explicit key; filesystem, media, and sqlite also
-  require `DROIDMCP_ROOT` — an unconfigured server can never fall back to `/` or run
-  unauthenticated.
-- **Dev vs. production.** Other servers accept every request when no key is set
-  (banner logs `auth=disabled`) — meant only for a single shell on `localhost`.
-  Anywhere else, set a random key and enable TLS.
-- **`mcp-termux` is a remote shell.** Restrict it with `DROIDMCP_TERMUX_ALLOWLIST`,
-  give it a dedicated key, and don't run it unless you need it.
-- **Safe network defaults.** `mcp-scraper` blocks RFC1918/loopback and `mcp-network`
-  blocks public targets; override only when you understand the SSRF / scanning implications.
-- **Path safety.** `mcp-filesystem` rejects absolute paths and `..`, resolves
-  symlinks, and re-checks containment — and `mcp-media` and `mcp-sqlite` apply the
-  same checks to every path they read or write. `mcp-sqlite` additionally binds all
-  values as parameters and never interpolates them into SQL. Not fully TOCTOU-proof
-  — avoid roots that other untrusted processes can write to.
-- **Logs are redacted.** Attribute keys matching `token`, `secret`, `password`,
-  `api_key`, `authorization`, or `key` are replaced with `[REDACTED]`; the
-  `X-DroidMCP-Key` header is never logged.
-- **Signed releases.** Each release ships `SHA256SUMS` plus cosign `.sig` and
-  `.pem`. Verify before installing.
+- **No dev mode for sensitive servers.** `filesystem`, `termux`, `media`, and
+  `sqlite` refuse to start without an explicit key — and the first three plus
+  `sqlite` also require `DROIDMCP_ROOT`, so an unconfigured server can never act
+  on `/` or run unauthenticated.
+- **Loopback by design.** Every listener binds `127.0.0.1`; exposure beyond the
+  device is an explicit decision that requires a key and TLS.
+- **Sandboxed paths.** Absolute paths and `..` are rejected, symlinks are
+  resolved and containment re-checked on every path the servers touch;
+  `mcp-sqlite` additionally binds all SQL values as parameters.
+- **Conservative network defaults.** `mcp-scraper` blocks private/loopback
+  targets (SSRF) and `mcp-network` blocks public ones; both are explicit opt-ins.
+- **`mcp-termux` is a remote shell.** Restrict it with
+  `DROIDMCP_TERMUX_ALLOWLIST`, give it a dedicated key, run it only when needed.
+- **Redacted logs, signed releases.** Secret-like attributes are replaced with
+  `[REDACTED]`; releases ship `SHA256SUMS` with a cosign signature.
 
----
+## Development
 
-## Contributing
+```
+cmd/<server>/       one main package per server (filesystem, github, scraper,
+                    termux, network, clipboard, media, sqlite)
+internal/           core — shared HTTP/SSE server · config · logger · buildinfo
+docs/               usage guide (EN/ES) · security · Termux setup
+scripts/            reproducible ARM64 cross-build
+```
 
-Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and check
-[ROADMAP.md](ROADMAP.md) for planned work. Fork, branch, and open a pull request.
+Built with Go 1.26 on [mark3labs/mcp-go](https://github.com/mark3labs/mcp-go),
+[google/go-github](https://github.com/google/go-github),
+[gocolly/colly](https://github.com/gocolly/colly) +
+[goquery](https://github.com/PuerkitoBio/goquery),
+[modernc.org/sqlite](https://gitlab.com/cznic/sqlite), and
+[spf13/viper](https://github.com/spf13/viper). CI enforces `gofmt`, `go vet`,
+`go test -race`, `golangci-lint`, and `gosec`; tagged releases are built
+reproducibly and signed.
+
+Contributions are welcome — read [CONTRIBUTING.md](CONTRIBUTING.md) and check
+[ROADMAP.md](ROADMAP.md) for planned work.
 
 ## License
 
 Released under the [MIT License](LICENSE).
 
 <div align="center">
+<br>
 
 Built on Android, for Android — by Ale.
 
