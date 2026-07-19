@@ -8,6 +8,7 @@ bin/
 /network
 /clipboard
 /media
+/sqlite
 *.exe
 *.exe~
 *.dll

@@ -45,6 +45,7 @@ filesystem   github      scraper    termux      network     clipboard   media
 | `mcp-network` | LAN discovery and port scanning | `3004` |
 | `mcp-clipboard` | Android clipboard bridge via Termux:API | `3005` |
 | `mcp-media` | Media browsing and `ffmpeg`-based transforms | `3006` |
+| `mcp-sqlite` | Local SQLite databases (pure-Go, no CGO) | `3007` |
 
 <details open>
 <summary><b>mcp-filesystem</b> — secure file operations within a configurable root</summary>
@@ -162,6 +163,25 @@ filesystem   github      scraper    termux      network     clipboard   media
 
 </details>
 
+<details>
+<summary><b>mcp-sqlite</b> — local SQLite databases, pure-Go (no CGO)</summary>
+
+> Backed by `modernc.org/sqlite`, so the binary stays a single dependency-free
+> ARM64 file — no `libsqlite3`, no CGO. Databases are files under `DROIDMCP_ROOT`;
+> like `mcp-filesystem`, this server requires `DROIDMCP_ROOT` and a key. All values
+> are bound as parameters, so `?` placeholders keep statements injection-safe.
+
+| Tool | Description |
+|------|-------------|
+| `open_db` | Open a database, creating the file (and parent dirs) if needed |
+| `query` | Run a read statement (SELECT/WITH/PRAGMA/…) and return rows as JSON |
+| `execute` | Run a write statement (INSERT/UPDATE/DELETE/DDL); returns rows affected |
+| `list_tables` | List user tables and views (internal `sqlite_*` objects excluded) |
+| `describe_table` | Column schema for a table (name, type, NOT NULL, default, PK) |
+| `export_csv` | Stream a query's results into a CSV file under root |
+
+</details>
+
 ---
 
 ## Installation
@@ -185,7 +205,7 @@ make build-arm64      # cross-compile from another machine
 
 `make build` produces one binary per server in `bin/`: `droidmcp-filesystem`,
 `droidmcp-github`, `droidmcp-scraper`, `droidmcp-termux`, `droidmcp-network`,
-`droidmcp-clipboard`, `droidmcp-media`.
+`droidmcp-clipboard`, `droidmcp-media`, `droidmcp-sqlite`.
 
 ---
 
@@ -200,7 +220,7 @@ lives in [`docs/security.md`](docs/security.md).
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DROIDMCP_PORT` | TCP port the SSE listener binds to | `3000` |
-| `DROIDMCP_ROOT` | Filesystem root, validated at startup. **Required by `mcp-filesystem` and `mcp-media`.** | `/` (ignored by other servers) |
+| `DROIDMCP_ROOT` | Filesystem root, validated at startup. **Required by `mcp-filesystem`, `mcp-media`, and `mcp-sqlite`.** | `/` (ignored by other servers) |
 | `DROIDMCP_API_KEY` | Global key. If set, every request must carry `X-DroidMCP-Key` | unset (dev mode) |
 | `DROIDMCP_<SERVER>_KEY` | Per-server override, e.g. `DROIDMCP_TERMUX_KEY`; wins over the global key | unset |
 | `DROIDMCP_TLS_CERT` · `DROIDMCP_TLS_KEY` | PEM cert and key. Both set enables HTTPS + HSTS | unset |
@@ -224,8 +244,8 @@ lives in [`docs/security.md`](docs/security.md).
 supervisor (systemd, Docker, k8s) can probe without the key. Every other route
 requires `X-DroidMCP-Key` when a key is configured; comparison is constant-time.
 With no key, most servers log `auth=disabled` and accept every request — use only
-on `localhost`. `mcp-filesystem`, `mcp-termux`, and `mcp-media` are exceptions:
-they refuse to start without a key.
+on `localhost`. `mcp-filesystem`, `mcp-termux`, `mcp-media`, and `mcp-sqlite` are
+exceptions: they refuse to start without a key.
 
 ---
 
@@ -244,6 +264,7 @@ and run the binary:
 | network | `3004` | `droidmcp-network` | — |
 | clipboard | `3005` | `droidmcp-clipboard` | `termux-api` package + app |
 | media | `3006` | `droidmcp-media` | `DROIDMCP_ROOT` + a key (`ffmpeg` for transforms) |
+| sqlite | `3007` | `droidmcp-sqlite` | `DROIDMCP_ROOT` + a key |
 
 **Production example — filesystem with auth and TLS:**
 
@@ -344,9 +365,9 @@ DroidMCP/
 
 Full threat model and production checklist in [`docs/security.md`](docs/security.md). Highlights:
 
-- **`mcp-filesystem`, `mcp-termux`, and `mcp-media` have no dev mode.** All refuse
-  to start without an explicit key; filesystem and media also require
-  `DROIDMCP_ROOT` — an unconfigured server can never fall back to `/` or run
+- **`mcp-filesystem`, `mcp-termux`, `mcp-media`, and `mcp-sqlite` have no dev mode.**
+  All refuse to start without an explicit key; filesystem, media, and sqlite also
+  require `DROIDMCP_ROOT` — an unconfigured server can never fall back to `/` or run
   unauthenticated.
 - **Dev vs. production.** Other servers accept every request when no key is set
   (banner logs `auth=disabled`) — meant only for a single shell on `localhost`.
@@ -356,9 +377,10 @@ Full threat model and production checklist in [`docs/security.md`](docs/security
 - **Safe network defaults.** `mcp-scraper` blocks RFC1918/loopback and `mcp-network`
   blocks public targets; override only when you understand the SSRF / scanning implications.
 - **Path safety.** `mcp-filesystem` rejects absolute paths and `..`, resolves
-  symlinks, and re-checks containment — and `mcp-media` applies the same checks to
-  every path it reads or writes. Not fully TOCTOU-proof — avoid roots that other
-  untrusted processes can write to.
+  symlinks, and re-checks containment — and `mcp-media` and `mcp-sqlite` apply the
+  same checks to every path they read or write. `mcp-sqlite` additionally binds all
+  values as parameters and never interpolates them into SQL. Not fully TOCTOU-proof
+  — avoid roots that other untrusted processes can write to.
 - **Logs are redacted.** Attribute keys matching `token`, `secret`, `password`,
   `api_key`, `authorization`, or `key` are replaced with `[REDACTED]`; the
   `X-DroidMCP-Key` header is never logged.

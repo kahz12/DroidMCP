@@ -22,6 +22,7 @@ Versión en español: [`usage.es.md`](usage.es.md).
   - [mcp-network](#mcp-network)
   - [mcp-clipboard](#mcp-clipboard)
   - [mcp-media](#mcp-media)
+  - [mcp-sqlite](#mcp-sqlite)
 - [Recipes](#recipes)
 - [Troubleshooting](#troubleshooting)
 
@@ -61,8 +62,8 @@ must send it in the `X-DroidMCP-Key` header. The comparison is constant-time.
 The key is resolved per server: `DROIDMCP_<SERVER>_KEY` is checked first (for
 example `DROIDMCP_TERMUX_KEY`), then the global `DROIDMCP_API_KEY`. With no key
 set, most servers run in **dev mode** — they accept every request and log
-`auth=disabled` at startup. `mcp-filesystem`, `mcp-termux`, and `mcp-media` have
-no dev mode: they refuse to start without a key.
+`auth=disabled` at startup. `mcp-filesystem`, `mcp-termux`, `mcp-media`, and
+`mcp-sqlite` have no dev mode: they refuse to start without a key.
 
 **TLS.** Set both `DROIDMCP_TLS_CERT` and `DROIDMCP_TLS_KEY` to PEM files and the
 server serves HTTPS and adds an HSTS header. If only one is set, it falls back
@@ -126,6 +127,7 @@ the binaries at device boot. A convention that matches the rest of the docs:
 | network | `3004` | `droidmcp-network` |
 | clipboard | `3005` | `droidmcp-clipboard` |
 | media | `3006` | `droidmcp-media` |
+| sqlite | `3007` | `droidmcp-sqlite` |
 
 ---
 
@@ -150,7 +152,7 @@ launching the binary.
 
 | Variable | Server | Default | Notes |
 |----------|--------|---------|-------|
-| `DROIDMCP_ROOT` | filesystem · media | none (required) | Directory the server may act on. Must exist and be a directory. Both filesystem and media refuse to start if unset — the shared default of `/` would expose the whole device. |
+| `DROIDMCP_ROOT` | filesystem · media · sqlite | none (required) | Directory the server may act on. Must exist and be a directory. filesystem, media, and sqlite refuse to start if unset — the shared default of `/` would expose the whole device. |
 | `DROIDMCP_FILESYSTEM_KEY` | filesystem | unset | Required (this or `DROIDMCP_API_KEY`); no dev mode. |
 | `DROIDMCP_MAX_READ_BYTES` | filesystem | `10485760` (10 MiB) | Cap on bytes a single `read_file` buffers. Non-numeric or non-positive values are ignored. |
 | `GITHUB_TOKEN` | github | none (required) | Personal Access Token. See the three accepted names below. |
@@ -166,6 +168,7 @@ launching the binary.
 | `DROIDMCP_MEDIA_KEY` | media | unset | Required (this or `DROIDMCP_API_KEY`); no dev mode. |
 | `DROIDMCP_MEDIA_FFMPEG` | media | PATH lookup | Explicit path to the `ffmpeg` binary used by `convert_image`, `thumbnail`, and `extract_audio`. |
 | `DROIDMCP_MEDIA_EXIFTOOL` | media | PATH lookup | Explicit path to `exiftool`; when present, enriches `get_metadata`. |
+| `DROIDMCP_SQLITE_KEY` | sqlite | unset | Required (this or `DROIDMCP_API_KEY`); no dev mode. |
 
 The GitHub token is resolved in order: `GITHUB_TOKEN`, then `GITHUB_APP_TOKEN`,
 then `GITHUB_FINE_GRAINED_TOKEN`. The first one set is used and validated at
@@ -625,6 +628,96 @@ The transform tools fail with an install hint when `ffmpeg` is not found. Set
 
 ---
 
+### mcp-sqlite
+
+Local SQLite databases stored as files under `DROIDMCP_ROOT`. The engine is
+`modernc.org/sqlite`, a pure-Go implementation, so the binary needs no CGO and no
+`libsqlite3`. Paths are validated exactly as in `mcp-filesystem` — absolute paths
+and `..` are rejected, and symlinks are resolved and re-checked. Like filesystem,
+this server **requires both `DROIDMCP_ROOT` and a key and has no dev mode**: it
+creates files and executes arbitrary SQL.
+
+Every `db` and `destination` is relative to `DROIDMCP_ROOT`. All user values must
+be passed through the `args` array rather than being formatted into the SQL text:
+they are bound as parameters, which is what keeps statements injection-safe. Use
+`?` placeholders in `sql`, one per element of `args`, in order. Numbers, strings,
+booleans, and `null` are accepted; an integral number binds as an integer.
+
+Only `open_db` creates a database — `query`, `execute`, `list_tables`,
+`describe_table`, and `export_csv` return an error for a path that does not exist
+yet, so a typo can never silently create an empty database. Connections are pooled
+and reused across calls within a running server, with a single writer so
+concurrent calls do not race on the file.
+
+**`open_db`** — open a database, creating the file (and any missing parent
+directories) if it does not exist. Returns `{path, created, sqlite_version}`,
+where `created` is `true` only when this call made the file. Calling it first is
+optional; the other tools open an existing database lazily.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `db` | string | yes | Database file path relative to root, e.g. `data/app.db`. |
+
+**`query`** — run a read-only statement and return its rows. The leading keyword
+must be `SELECT`, `WITH`, `PRAGMA`, `EXPLAIN`, or `VALUES`; a write statement is
+rejected (use `execute`). Returns `{columns, rows, count, truncated}`, where
+`rows` is a JSON array of column-keyed objects and `truncated` is `true` when
+more rows existed than `max_rows` allowed. TEXT/BLOB values are returned as
+strings.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `db` | string | yes | — | Database file path relative to root. Must already exist. |
+| `sql` | string | yes | — | The statement; use `?` placeholders for values. |
+| `args` | any[] | no | none | Positional parameters bound to the `?` placeholders, in order. |
+| `max_rows` | number | no | `1000` | Cap on returned rows; `0` means unlimited. |
+| `timeout_seconds` | number | no | `30` | Per-call timeout. Max `600`. |
+
+**`execute`** — run a write statement (`INSERT`/`UPDATE`/`DELETE`, DDL such as
+`CREATE`/`DROP`/`ALTER`, etc.). Returns `{rows_affected, last_insert_id}` where
+the driver reports them.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `db` | string | yes | — | Database file path relative to root. Must already exist. |
+| `sql` | string | yes | — | The statement; use `?` placeholders for values. |
+| `args` | any[] | no | none | Positional parameters bound to the `?` placeholders, in order. |
+| `timeout_seconds` | number | no | `30` | Per-call timeout. Max `600`. |
+
+**`list_tables`** — list the user tables and views in a database. Internal
+`sqlite_*` objects are excluded. Returns a JSON array of `{name, type}` where
+`type` is `table` or `view`, ordered by name.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `db` | string | yes | Database file path relative to root. Must already exist. |
+
+**`describe_table`** — describe a table's columns via `PRAGMA table_info`. The
+table name is validated against the schema before use, so it cannot be an
+injection vector. Returns `{table, columns}` where each column is
+`{cid, name, type, notnull, default, pk}`.
+
+| Argument | Type | Required | Description |
+|----------|------|:---:|-------------|
+| `db` | string | yes | Database file path relative to root. Must already exist. |
+| `table` | string | yes | Name of the table or view to describe. |
+
+**`export_csv`** — run a read statement and stream its results into a CSV file
+under root (a header row plus one row per record). Returns
+`{path, rows, columns}`. The destination's parent directories are created; a
+failure mid-stream removes only a file this call created, never pre-existing data,
+and the destination must differ from the source database.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `db` | string | yes | — | Database file path relative to root. Must already exist. |
+| `sql` | string | yes | — | The `SELECT` whose rows are exported; use `?` placeholders for values. |
+| `destination` | string | yes | — | Destination CSV path relative to root. Must differ from `db`. |
+| `args` | any[] | no | none | Positional parameters bound to the `?` placeholders, in order. |
+| `timeout_seconds` | number | no | `30` | Per-call timeout. Max `600`. |
+
+---
+
 ## Recipes
 
 **Read a large log in pages.** `read_file` refuses to buffer a file over
@@ -659,14 +752,20 @@ messages on the device; `termux_tts_speak` reads text aloud.
 a representative frame from videos. `get_metadata` gives you dimensions and EXIF
 for any single file, and `convert_image` / `extract_audio` handle format changes.
 
+**Keep local state in SQLite.** `open_db` a file under root, `execute` your
+`CREATE TABLE`, then `execute` inserts with `?` placeholders and an `args` array
+(never string-format values into the SQL). Read it back with `query`, inspect the
+schema with `list_tables` / `describe_table`, and hand a snapshot to another tool
+with `export_csv`.
+
 ---
 
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 |---------|---------------|
-| Server exits immediately, logs `requires DROIDMCP_ROOT` | `mcp-filesystem` or `mcp-media` was started without `DROIDMCP_ROOT`. Set it to a real directory. |
-| Server exits, logs `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux`/`mcp-media` need a key. Set one; they have no dev mode. |
+| Server exits immediately, logs `requires DROIDMCP_ROOT` | `mcp-filesystem`, `mcp-media`, or `mcp-sqlite` was started without `DROIDMCP_ROOT`. Set it to a real directory. |
+| Server exits, logs `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux`/`mcp-media`/`mcp-sqlite` need a key. Set one; they have no dev mode. |
 | Server exits, logs `DROIDMCP_PORT out of range` or `not a directory` | Config validation failed. Port must be `1`–`65535`; `DROIDMCP_ROOT` must exist and be a directory. |
 | Clients get `401 unauthorized` | A key is configured but the client isn't sending `X-DroidMCP-Key`, or it doesn't match. `/healthz` is exempt, so a working health probe with failing tool calls points at the header. |
 | `mcp-github` won't start, `token validation failed` | The token is missing, expired, or lacks scope. Set `GITHUB_TOKEN` (or `GITHUB_APP_TOKEN` / `GITHUB_FINE_GRAINED_TOKEN`). |
@@ -676,6 +775,8 @@ for any single file, and `convert_image` / `extract_audio` handle format changes
 | Clipboard/termux wrappers fail with a "termux-api not installed" hint | Install `pkg install termux-api` and the Termux:API app, then grant its permissions. |
 | `run_command` says a command is `not in DROIDMCP_TERMUX_ALLOWLIST` | The allowlist is set and doesn't include that command. Add it, or clear the variable to allow all. |
 | `mcp-media` transform fails with an `ffmpeg not found` hint | `convert_image`/`thumbnail`/`extract_audio` need ffmpeg. Run `pkg install ffmpeg`, or set `DROIDMCP_MEDIA_FFMPEG` to its path. |
+| `mcp-sqlite` returns `database … does not exist; call open_db first` | Only `open_db` creates a database; `query`/`execute`/etc. require an existing file. Call `open_db` (or fix the path). |
+| `mcp-sqlite` `query` returns `query only runs read statements` | A write statement was sent to `query`. Use `execute` for `INSERT`/`UPDATE`/`DELETE`/DDL. |
 | Can't reach a server from another machine | By design: the listener is bound to `127.0.0.1`. Front it with a reverse proxy or port-forward, and read [`security.md`](security.md) before exposing it. |
 
 For anything security-related — exposure, keys, TLS, the full threat model —

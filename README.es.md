@@ -45,6 +45,7 @@ filesystem   github      scraper    termux      network     clipboard   media
 | `mcp-network` | Descubrimiento de LAN y escaneo de puertos | `3004` |
 | `mcp-clipboard` | Puente del portapapeles de Android vía Termux:API | `3005` |
 | `mcp-media` | Navegación de medios y transformaciones con `ffmpeg` | `3006` |
+| `mcp-sqlite` | Bases de datos SQLite locales (Go puro, sin CGO) | `3007` |
 
 <details open>
 <summary><b>mcp-filesystem</b> — operaciones de archivos seguras dentro de una raíz configurable</summary>
@@ -162,6 +163,26 @@ filesystem   github      scraper    termux      network     clipboard   media
 
 </details>
 
+<details>
+<summary><b>mcp-sqlite</b> — bases de datos SQLite locales, Go puro (sin CGO)</summary>
+
+> Basado en `modernc.org/sqlite`, así el binario sigue siendo un único archivo
+> ARM64 sin dependencias — sin `libsqlite3`, sin CGO. Las bases de datos son
+> archivos bajo `DROIDMCP_ROOT`; como `mcp-filesystem`, este servidor requiere
+> `DROIDMCP_ROOT` y una key. Todos los valores se enlazan como parámetros, así los
+> marcadores `?` mantienen las sentencias a salvo de inyección.
+
+| Tool | Descripción |
+|------|-------------|
+| `open_db` | Abre una base de datos, creando el archivo (y directorios padre) si falta |
+| `query` | Ejecuta una sentencia de lectura (SELECT/WITH/PRAGMA/…) y devuelve filas en JSON |
+| `execute` | Ejecuta una sentencia de escritura (INSERT/UPDATE/DELETE/DDL); devuelve filas afectadas |
+| `list_tables` | Lista tablas y vistas de usuario (excluye los objetos internos `sqlite_*`) |
+| `describe_table` | Esquema de columnas de una tabla (nombre, tipo, NOT NULL, default, PK) |
+| `export_csv` | Vuelca el resultado de una consulta a un archivo CSV bajo la raíz |
+
+</details>
+
 ---
 
 ## Instalación
@@ -185,7 +206,7 @@ make build-arm64      # compilación cruzada desde otra máquina
 
 `make build` genera un binario por servidor en `bin/`: `droidmcp-filesystem`,
 `droidmcp-github`, `droidmcp-scraper`, `droidmcp-termux`, `droidmcp-network`,
-`droidmcp-clipboard`, `droidmcp-media`.
+`droidmcp-clipboard`, `droidmcp-media`, `droidmcp-sqlite`.
 
 ---
 
@@ -200,7 +221,7 @@ logging, modelo de amenazas) está en [`docs/security.md`](docs/security.md).
 | Variable | Descripción | Por defecto |
 |----------|-------------|-------------|
 | `DROIDMCP_PORT` | Puerto TCP donde escucha el listener SSE | `3000` |
-| `DROIDMCP_ROOT` | Raíz de archivos, validada al arrancar. **Obligatoria en `mcp-filesystem` y `mcp-media`.** | `/` (los demás la ignoran) |
+| `DROIDMCP_ROOT` | Raíz de archivos, validada al arrancar. **Obligatoria en `mcp-filesystem`, `mcp-media` y `mcp-sqlite`.** | `/` (los demás la ignoran) |
 | `DROIDMCP_API_KEY` | Key global. Si está definida, toda petición debe llevar `X-DroidMCP-Key` | sin definir (modo dev) |
 | `DROIDMCP_<SERVER>_KEY` | Override por servidor, p. ej. `DROIDMCP_TERMUX_KEY`; prevalece sobre la global | sin definir |
 | `DROIDMCP_TLS_CERT` · `DROIDMCP_TLS_KEY` | Cert y clave PEM. Ambas definidas habilitan HTTPS + HSTS | sin definir |
@@ -225,7 +246,7 @@ autenticación, de modo que un supervisor (systemd, Docker, k8s) pueda sondear s
 la key. El resto de rutas exige `X-DroidMCP-Key` cuando hay una key configurada; la
 comparación es en tiempo constante. Sin key, la mayoría de servidores registran
 `auth=disabled` y aceptan todas las peticiones — úsalo solo en `localhost`.
-`mcp-filesystem`, `mcp-termux` y `mcp-media` son excepciones: se niegan a arrancar sin key.
+`mcp-filesystem`, `mcp-termux`, `mcp-media` y `mcp-sqlite` son excepciones: se niegan a arrancar sin key.
 
 ---
 
@@ -244,6 +265,7 @@ necesarias y ejecuta el binario:
 | network | `3004` | `droidmcp-network` | — |
 | clipboard | `3005` | `droidmcp-clipboard` | paquete + app `termux-api` |
 | media | `3006` | `droidmcp-media` | `DROIDMCP_ROOT` + una key (`ffmpeg` para transformar) |
+| sqlite | `3007` | `droidmcp-sqlite` | `DROIDMCP_ROOT` + una key |
 
 **Ejemplo de producción — filesystem con auth y TLS:**
 
@@ -344,9 +366,10 @@ DroidMCP/
 
 Modelo de amenazas y checklist de producción completos en [`docs/security.md`](docs/security.md). Puntos clave:
 
-- **`mcp-filesystem`, `mcp-termux` y `mcp-media` no tienen modo dev.** Todos se
-  niegan a arrancar sin una key; filesystem y media exigen además `DROIDMCP_ROOT`
-  — un servidor sin configurar nunca cae en el inseguro `/` ni corre sin autenticación.
+- **`mcp-filesystem`, `mcp-termux`, `mcp-media` y `mcp-sqlite` no tienen modo dev.**
+  Todos se niegan a arrancar sin una key; filesystem, media y sqlite exigen además
+  `DROIDMCP_ROOT` — un servidor sin configurar nunca cae en el inseguro `/` ni corre
+  sin autenticación.
 - **Dev vs producción.** Los demás servidores aceptan todas las peticiones cuando
   no hay key (el banner registra `auth=disabled`) — pensado solo para una sola
   shell en `localhost`. En cualquier otro escenario, define una key aleatoria y habilita TLS.
@@ -356,9 +379,10 @@ Modelo de amenazas y checklist de producción completos en [`docs/security.md`](
   `mcp-network` bloquea objetivos públicos; anúlalos solo si entiendes las
   implicaciones de SSRF / escaneo.
 - **Seguridad de rutas.** `mcp-filesystem` rechaza rutas absolutas y `..`, resuelve
-  symlinks y re-verifica el confinamiento — y `mcp-media` aplica las mismas
-  comprobaciones a cada ruta que lee o escribe. No es totalmente a prueba de TOCTOU
-  — evita raíces donde puedan escribir otros procesos no confiables.
+  symlinks y re-verifica el confinamiento — y `mcp-media` y `mcp-sqlite` aplican las
+  mismas comprobaciones a cada ruta que leen o escriben. `mcp-sqlite` además enlaza
+  todos los valores como parámetros y nunca los interpola en el SQL. No es totalmente
+  a prueba de TOCTOU — evita raíces donde puedan escribir otros procesos no confiables.
 - **Los logs se redactan.** Las claves de atributos que coinciden con `token`,
   `secret`, `password`, `api_key`, `authorization` o `key` se reemplazan por
   `[REDACTED]`; la cabecera `X-DroidMCP-Key` nunca se registra.

@@ -24,6 +24,7 @@ de producción, ver [`security.md`](security.md). Versión en inglés:
   - [mcp-network](#mcp-network)
   - [mcp-clipboard](#mcp-clipboard)
   - [mcp-media](#mcp-media)
+  - [mcp-sqlite](#mcp-sqlite)
 - [Recetas](#recetas)
 - [Resolución de problemas](#resolución-de-problemas)
 
@@ -66,8 +67,8 @@ tiempo constante. La key se resuelve por servidor: primero se comprueba
 `DROIDMCP_<SERVER>_KEY` (por ejemplo `DROIDMCP_TERMUX_KEY`) y luego la global
 `DROIDMCP_API_KEY`. Sin key definida, la mayoría de servidores corren en **modo
 dev** — aceptan todas las peticiones y registran `auth=disabled` al arrancar.
-`mcp-filesystem`, `mcp-termux` y `mcp-media` no tienen modo dev: se niegan a
-arrancar sin key.
+`mcp-filesystem`, `mcp-termux`, `mcp-media` y `mcp-sqlite` no tienen modo dev: se
+niegan a arrancar sin key.
 
 **TLS.** Define `DROIDMCP_TLS_CERT` y `DROIDMCP_TLS_KEY` apuntando a archivos PEM
 y el servidor sirve HTTPS y añade una cabecera HSTS. Si solo defines una de las
@@ -133,6 +134,7 @@ el resto de la documentación:
 | network | `3004` | `droidmcp-network` |
 | clipboard | `3005` | `droidmcp-clipboard` |
 | media | `3006` | `droidmcp-media` |
+| sqlite | `3007` | `droidmcp-sqlite` |
 
 ---
 
@@ -157,7 +159,7 @@ lanzar el binario.
 
 | Variable | Servidor | Por defecto | Notas |
 |----------|----------|-------------|-------|
-| `DROIDMCP_ROOT` | filesystem · media | ninguno (requerido) | Directorio sobre el que puede actuar el servidor. Debe existir y ser un directorio. Tanto filesystem como media no arrancan si está sin definir — el default compartido de `/` expondría todo el dispositivo. |
+| `DROIDMCP_ROOT` | filesystem · media · sqlite | ninguno (requerido) | Directorio sobre el que puede actuar el servidor. Debe existir y ser un directorio. filesystem, media y sqlite no arrancan si está sin definir — el default compartido de `/` expondría todo el dispositivo. |
 | `DROIDMCP_FILESYSTEM_KEY` | filesystem | sin definir | Requerida (esta o `DROIDMCP_API_KEY`); sin modo dev. |
 | `DROIDMCP_MAX_READ_BYTES` | filesystem | `10485760` (10 MiB) | Límite de bytes que un solo `read_file` mantiene en memoria. Valores no numéricos o no positivos se ignoran. |
 | `GITHUB_TOKEN` | github | ninguno (requerido) | Personal Access Token. Ver los tres nombres aceptados abajo. |
@@ -173,6 +175,7 @@ lanzar el binario.
 | `DROIDMCP_MEDIA_KEY` | media | sin definir | Requerida (esta o `DROIDMCP_API_KEY`); sin modo dev. |
 | `DROIDMCP_MEDIA_FFMPEG` | media | búsqueda en PATH | Ruta explícita al binario `ffmpeg` usado por `convert_image`, `thumbnail` y `extract_audio`. |
 | `DROIDMCP_MEDIA_EXIFTOOL` | media | búsqueda en PATH | Ruta explícita a `exiftool`; cuando está presente, enriquece `get_metadata`. |
+| `DROIDMCP_SQLITE_KEY` | sqlite | sin definir | Requerida (esta o `DROIDMCP_API_KEY`); sin modo dev. |
 
 El token de GitHub se resuelve en orden: `GITHUB_TOKEN`, luego
 `GITHUB_APP_TOKEN`, luego `GITHUB_FINE_GRAINED_TOKEN`. Se usa el primero que esté
@@ -644,6 +647,97 @@ fijar un binario concreto.
 
 ---
 
+### mcp-sqlite
+
+Bases de datos SQLite locales almacenadas como archivos bajo `DROIDMCP_ROOT`. El
+motor es `modernc.org/sqlite`, una implementación en Go puro, así que el binario no
+necesita CGO ni `libsqlite3`. Las rutas se validan igual que en `mcp-filesystem` —
+se rechazan rutas absolutas y `..`, y los symlinks se resuelven y re-verifican.
+Como filesystem, este servidor **requiere `DROIDMCP_ROOT` y una key y no tiene modo
+dev**: crea archivos y ejecuta SQL arbitrario.
+
+Cada `db` y `destination` es relativo a `DROIDMCP_ROOT`. Todos los valores del
+usuario deben pasarse por el array `args` en lugar de formatearse dentro del texto
+SQL: se enlazan como parámetros, que es lo que mantiene las sentencias a salvo de
+inyección. Usa marcadores `?` en `sql`, uno por cada elemento de `args`, en orden.
+Se aceptan números, cadenas, booleanos y `null`; un número entero se enlaza como
+entero.
+
+Solo `open_db` crea una base de datos — `query`, `execute`, `list_tables`,
+`describe_table` y `export_csv` devuelven un error para una ruta que aún no existe,
+así un error de tipeo nunca crea en silencio una base vacía. Las conexiones se
+agrupan y reutilizan entre llamadas dentro de un servidor en marcha, con un único
+escritor para que las llamadas concurrentes no compitan por el archivo.
+
+**`open_db`** — abre una base de datos, creando el archivo (y los directorios
+padre que falten) si no existe. Devuelve `{path, created, sqlite_version}`, donde
+`created` es `true` solo cuando esta llamada creó el archivo. Llamarla primero es
+opcional; las demás tools abren una base existente de forma perezosa.
+
+| Argumento | Tipo | Requerido | Descripción |
+|-----------|------|:---:|-------------|
+| `db` | string | sí | Ruta del archivo de base de datos relativa a la raíz, p. ej. `data/app.db`. |
+
+**`query`** — ejecuta una sentencia de solo lectura y devuelve sus filas. La
+palabra clave inicial debe ser `SELECT`, `WITH`, `PRAGMA`, `EXPLAIN` o `VALUES`;
+una sentencia de escritura se rechaza (usa `execute`). Devuelve
+`{columns, rows, count, truncated}`, donde `rows` es un array JSON de objetos por
+columna y `truncated` es `true` cuando existían más filas de las que permitía
+`max_rows`. Los valores TEXT/BLOB se devuelven como cadenas.
+
+| Argumento | Tipo | Requerido | Default | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `db` | string | sí | — | Ruta de la base de datos relativa a la raíz. Debe existir. |
+| `sql` | string | sí | — | La sentencia; usa marcadores `?` para los valores. |
+| `args` | any[] | no | ninguno | Parámetros posicionales enlazados a los marcadores `?`, en orden. |
+| `max_rows` | number | no | `1000` | Tope de filas devueltas; `0` es ilimitado. |
+| `timeout_seconds` | number | no | `30` | Timeout por llamada. Máx `600`. |
+
+**`execute`** — ejecuta una sentencia de escritura (`INSERT`/`UPDATE`/`DELETE`, DDL
+como `CREATE`/`DROP`/`ALTER`, etc.). Devuelve `{rows_affected, last_insert_id}`
+según los reporte el driver.
+
+| Argumento | Tipo | Requerido | Default | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `db` | string | sí | — | Ruta de la base de datos relativa a la raíz. Debe existir. |
+| `sql` | string | sí | — | La sentencia; usa marcadores `?` para los valores. |
+| `args` | any[] | no | ninguno | Parámetros posicionales enlazados a los marcadores `?`, en orden. |
+| `timeout_seconds` | number | no | `30` | Timeout por llamada. Máx `600`. |
+
+**`list_tables`** — lista las tablas y vistas de usuario de una base de datos. Los
+objetos internos `sqlite_*` se excluyen. Devuelve un array JSON de `{name, type}`
+donde `type` es `table` o `view`, ordenado por nombre.
+
+| Argumento | Tipo | Requerido | Descripción |
+|-----------|------|:---:|-------------|
+| `db` | string | sí | Ruta de la base de datos relativa a la raíz. Debe existir. |
+
+**`describe_table`** — describe las columnas de una tabla vía `PRAGMA table_info`.
+El nombre de la tabla se valida contra el esquema antes de usarlo, así no puede ser
+un vector de inyección. Devuelve `{table, columns}` donde cada columna es
+`{cid, name, type, notnull, default, pk}`.
+
+| Argumento | Tipo | Requerido | Descripción |
+|-----------|------|:---:|-------------|
+| `db` | string | sí | Ruta de la base de datos relativa a la raíz. Debe existir. |
+| `table` | string | sí | Nombre de la tabla o vista a describir. |
+
+**`export_csv`** — ejecuta una sentencia de lectura y vuelca sus resultados en un
+archivo CSV bajo la raíz (una fila de cabecera más una fila por registro).
+Devuelve `{path, rows, columns}`. Los directorios padre del destino se crean; un
+fallo a mitad de escritura elimina solo un archivo creado por esta llamada, nunca
+datos preexistentes, y el destino debe diferir de la base de datos origen.
+
+| Argumento | Tipo | Requerido | Default | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `db` | string | sí | — | Ruta de la base de datos relativa a la raíz. Debe existir. |
+| `sql` | string | sí | — | El `SELECT` cuyas filas se exportan; usa marcadores `?` para los valores. |
+| `destination` | string | sí | — | Ruta CSV destino relativa a la raíz. Debe diferir de `db`. |
+| `args` | any[] | no | ninguno | Parámetros posicionales enlazados a los marcadores `?`, en orden. |
+| `timeout_seconds` | number | no | `30` | Timeout por llamada. Máx `600`. |
+
+---
+
 ## Recetas
 
 **Leer un log grande por páginas.** `read_file` se niega a bufferizar de una vez
@@ -682,14 +776,20 @@ devuelto a `thumbnail`, escribiendo a un destino `thumbs/` y pasando un
 dimensiones y EXIF de cualquier archivo, y `convert_image` / `extract_audio`
 manejan los cambios de formato.
 
+**Guardar estado local en SQLite.** `open_db` de un archivo bajo la raíz,
+`execute` tu `CREATE TABLE`, luego `execute` los inserts con marcadores `?` y un
+array `args` (nunca formatees los valores dentro del SQL). Léelo de vuelta con
+`query`, inspecciona el esquema con `list_tables` / `describe_table`, y entrega una
+instantánea a otra tool con `export_csv`.
+
 ---
 
 ## Resolución de problemas
 
 | Síntoma | Causa y solución |
 |---------|------------------|
-| El servidor sale de inmediato, registra `requires DROIDMCP_ROOT` | `mcp-filesystem` o `mcp-media` se arrancó sin `DROIDMCP_ROOT`. Defínelo a un directorio real. |
-| El servidor sale, registra `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux`/`mcp-media` necesitan una key. Define una; no tienen modo dev. |
+| El servidor sale de inmediato, registra `requires DROIDMCP_ROOT` | `mcp-filesystem`, `mcp-media` o `mcp-sqlite` se arrancó sin `DROIDMCP_ROOT`. Defínelo a un directorio real. |
+| El servidor sale, registra `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux`/`mcp-media`/`mcp-sqlite` necesitan una key. Define una; no tienen modo dev. |
 | El servidor sale, registra `DROIDMCP_PORT out of range` o `not a directory` | Falló la validación de configuración. El puerto debe estar en `1`–`65535`; `DROIDMCP_ROOT` debe existir y ser un directorio. |
 | Los clientes reciben `401 unauthorized` | Hay una key configurada pero el cliente no envía `X-DroidMCP-Key`, o no coincide. `/healthz` está exento, así que un health check que funciona con llamadas a tools que fallan apunta a la cabecera. |
 | `mcp-github` no arranca, `token validation failed` | El token falta, expiró o carece de scope. Define `GITHUB_TOKEN` (o `GITHUB_APP_TOKEN` / `GITHUB_FINE_GRAINED_TOKEN`). |
@@ -699,6 +799,8 @@ manejan los cambios de formato.
 | Los envoltorios de clipboard/termux fallan con una pista «termux-api not installed» | Instala `pkg install termux-api` y la app Termux:API, y concede sus permisos. |
 | `run_command` dice que un comando `not in DROIDMCP_TERMUX_ALLOWLIST` | La allowlist está definida y no incluye ese comando. Añádelo, o vacía la variable para permitir todo. |
 | Una transformación de `mcp-media` falla con una pista `ffmpeg not found` | `convert_image`/`thumbnail`/`extract_audio` necesitan ffmpeg. Ejecuta `pkg install ffmpeg`, o define `DROIDMCP_MEDIA_FFMPEG` con su ruta. |
+| `mcp-sqlite` devuelve `database … does not exist; call open_db first` | Solo `open_db` crea una base de datos; `query`/`execute`/etc. requieren un archivo existente. Llama a `open_db` (o corrige la ruta). |
+| `mcp-sqlite` `query` devuelve `query only runs read statements` | Se envió una sentencia de escritura a `query`. Usa `execute` para `INSERT`/`UPDATE`/`DELETE`/DDL. |
 | No puedes alcanzar un servidor desde otra máquina | Es por diseño: el listener está enlazado a `127.0.0.1`. Ponle delante un proxy inverso o un reenvío de puertos, y lee [`security.md`](security.md) antes de exponerlo. |
 
 Para cualquier cosa relacionada con seguridad — exposición, keys, TLS, el modelo

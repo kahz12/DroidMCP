@@ -382,7 +382,7 @@ DroidMCP/
 
 ---
 
-### PHASE 14 — mcp-sqlite
+### PHASE 14 — mcp-sqlite [DONE]
 > **Goal:** Lightweight database operations for local data management
 
 #### MCP Tools
@@ -396,12 +396,13 @@ DroidMCP/
 | `export_csv`        | Export query results as CSV                  |
 
 #### Tasks
-- [ ] Add `modernc.org/sqlite` as dependency (pure Go, no CGO required on ARM64)
-- [ ] Implement `open_db` with path validation against `DROIDMCP_ROOT`
-- [ ] Implement `query` and `execute` using parameterized statements to prevent SQL injection
-- [ ] Implement `list_tables` and `describe_table` via `sqlite_master` schema queries
-- [ ] Implement `export_csv` streaming query results row-by-row into CSV format
-- [ ] Integration into build pipeline (Makefile/scripts)
+- [x] Add `modernc.org/sqlite` as dependency (pure Go, no CGO required on ARM64)
+- [x] Implement `open_db` with path validation against `DROIDMCP_ROOT` (creates the file + parent dirs; other tools require it to exist)
+- [x] Implement `query` and `execute` using parameterized statements to prevent SQL injection (`query` is read-only-guarded; values bound via `args`)
+- [x] Implement `list_tables` and `describe_table` via `sqlite_master` schema queries (table name validated before `PRAGMA table_info`)
+- [x] Implement `export_csv` streaming query results row-by-row into CSV format
+- [x] Integration into build pipeline (Makefile / `scripts/build-arm64.sh` / release workflow)
+- [x] Documentation: server tables in both READMEs and a full `### mcp-sqlite` section in `docs/usage.md` + `docs/usage.es.md`
 
 ---
 
