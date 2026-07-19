@@ -21,12 +21,16 @@ linters:
       # those errors and never depend on the side effect of the Close itself.
       # io.Copy into io.Discard is the standard "drain the body" idiom for
       # connection reuse and intentionally ignores the byte count.
+      # sql.Rows.Close is the same case: iteration errors are surfaced by the
+      # rows.Err() check every caller performs, and the deferred Close is
+      # release-only.
       exclude-functions:
         - (io.Closer).Close
         - (*os.File).Close
         - (net.Conn).Close
         - (*net.TCPConn).Close
         - (io.ReadCloser).Close
+        - (*database/sql.Rows).Close
         - io.Copy
     gosec:
       excludes:
