@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,17 +34,33 @@ var (
 )
 
 // getDB returns a ready connection pool for the database at absPath, opening it
-// on first use. The pool is capped at a single open connection: SQLite
-// serializes writers per file, and one connection sidesteps "database is locked"
-// races between concurrent tool calls in this process. A busy_timeout is set so
-// the rare cross-process contention waits briefly instead of failing outright.
-func getDB(absPath string) (*sql.DB, error) {
+// on first use. When readOnly is set the pool is opened with SQLite's read-only
+// URI (mode=ro), so the engine itself refuses every write on that handle — this
+// is what makes the `query` tool genuinely read-only, rejecting a write even
+// when it is smuggled in as a trailing statement (`SELECT 1; DELETE …`) or
+// hidden behind a leading CTE (`WITH … DELETE …`), neither of which a
+// leading-keyword check catches. open_db and execute use the read-write pool.
+//
+// The pool is capped at a single open connection: SQLite serializes writers per
+// file, and one connection sidesteps "database is locked" races between
+// concurrent tool calls in this process. A busy_timeout is set so the rare
+// cross-process contention waits briefly instead of failing outright. Pools are
+// cached per (path, mode) and released when the process exits.
+func getDB(absPath string, readOnly bool) (*sql.DB, error) {
 	dbMu.Lock()
 	defer dbMu.Unlock()
-	if db, ok := dbCache[absPath]; ok {
+	key := dbCacheKey(absPath, readOnly)
+	if db, ok := dbCache[key]; ok {
 		return db, nil
 	}
-	db, err := sql.Open("sqlite", absPath)
+	dsn := absPath
+	if readOnly {
+		// URI form so the path is escaped safely (spaces and other characters)
+		// and mode=ro is honoured, opening the file read-only at the handle
+		// level. dbForQuery guarantees the file already exists.
+		dsn = (&url.URL{Scheme: "file", Path: absPath, RawQuery: "mode=ro"}).String()
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -58,16 +75,26 @@ func getDB(absPath string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	dbCache[absPath] = db
+	dbCache[key] = db
 	return db, nil
 }
 
+// dbCacheKey namespaces cached pools by mode so the read-only and read-write
+// pools for the same file never collide.
+func dbCacheKey(absPath string, readOnly bool) string {
+	if readOnly {
+		return "ro\x00" + absPath
+	}
+	return "rw\x00" + absPath
+}
+
 // dbForQuery resolves a root-relative database path that must already exist and
-// returns its connection pool. Only open_db is allowed to create databases; the
-// read/write tools refuse a missing file so a typo does not silently leave an
-// empty database behind. On failure it returns an error tool result ready to be
-// returned to the caller.
-func dbForQuery(rel string) (*sql.DB, *mcp.CallToolResult) {
+// returns its connection pool. readOnly selects the mode=ro pool for the read
+// tools; execute passes false for the read-write pool. Only open_db is allowed
+// to create databases; the read/write tools refuse a missing file so a typo does
+// not silently leave an empty database behind. On failure it returns an error
+// tool result ready to be returned to the caller.
+func dbForQuery(rel string, readOnly bool) (*sql.DB, *mcp.CallToolResult) {
 	abs, err := securePath(rel)
 	if err != nil {
 		return nil, mcp.NewToolResultError(err.Error())
@@ -82,7 +109,7 @@ func dbForQuery(rel string) (*sql.DB, *mcp.CallToolResult) {
 	if info.IsDir() {
 		return nil, mcp.NewToolResultError(fmt.Sprintf("%q is a directory, not a database file", rel))
 	}
-	db, err := getDB(abs)
+	db, err := getDB(abs, readOnly)
 	if err != nil {
 		return nil, mcp.NewToolResultError(err.Error())
 	}
@@ -129,9 +156,11 @@ func normalizeArg(v any) any {
 	return v
 }
 
-// readKeywords is the set of statement kinds the `query` tool accepts. Write
-// statements are rejected there so an agent cannot mutate data through a tool
-// documented as read-only; they belong in `execute`.
+// readKeywords is the set of statement kinds the `query` tool accepts. This
+// leading-keyword check is a fast, friendly rejection ("use execute for
+// writes") — it is no longer the security boundary: query runs on a mode=ro
+// connection (see getDB), so the SQLite engine rejects any write regardless of
+// how the statement is shaped.
 var readKeywords = map[string]bool{
 	"SELECT": true, "WITH": true, "PRAGMA": true, "EXPLAIN": true, "VALUES": true,
 }
@@ -228,7 +257,7 @@ func handleOpenDB(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResu
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	db, err := getDB(abs)
+	db, err := getDB(abs, false)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -266,7 +295,10 @@ func handleQuery(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolRes
 		return mcp.NewToolResultError("max_rows must be >= 0"), nil
 	}
 
-	db, errRes := dbForQuery(rel)
+	// Read-only pool: mode=ro makes the engine reject any write reachable from
+	// this statement, so the read-only contract holds even for stacked or
+	// CTE-hidden writes the leadingKeyword check above cannot see.
+	db, errRes := dbForQuery(rel, true)
 	if errRes != nil {
 		return errRes, nil
 	}
@@ -307,7 +339,7 @@ func handleExecute(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	db, errRes := dbForQuery(rel)
+	db, errRes := dbForQuery(rel, false)
 	if errRes != nil {
 		return errRes, nil
 	}
@@ -341,7 +373,7 @@ func handleListTables(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	db, errRes := dbForQuery(rel)
+	db, errRes := dbForQuery(rel, true)
 	if errRes != nil {
 		return errRes, nil
 	}
@@ -391,7 +423,7 @@ func handleDescribeTable(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	db, errRes := dbForQuery(rel)
+	db, errRes := dbForQuery(rel, true)
 	if errRes != nil {
 		return errRes, nil
 	}

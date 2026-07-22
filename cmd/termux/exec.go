@@ -63,6 +63,14 @@ func runCommand(ctx context.Context, opts execOptions) (*execResult, error) {
 		if err := allowlistCheck(opts.Command); err != nil {
 			return nil, err
 		}
+		// A caller-supplied dynamic-linker override (LD_PRELOAD, LD_LIBRARY_PATH,
+		// …) could turn an allowlisted, benign binary into arbitrary code
+		// execution, so refuse those keys in env_extra. Operators that genuinely
+		// need them can set them in the server's own environment, which the
+		// child still inherits.
+		if err := checkEnvExtra(opts.EnvExtra); err != nil {
+			return nil, err
+		}
 	}
 	if opts.Timeout <= 0 {
 		opts.Timeout = defaultExecTimeout
@@ -175,6 +183,29 @@ func allowlistCheck(command string) error {
 		return nil
 	}
 	return fmt.Errorf("command %q not in DROIDMCP_TERMUX_ALLOWLIST", command)
+}
+
+// dangerousEnvPrefixes name environment variables that steer the dynamic
+// linker (LD_PRELOAD, LD_LIBRARY_PATH, LD_AUDIT, bionic's LD_CONFIG_FILE, and
+// the DYLD_* family). Allowing an untrusted caller to set them would let an
+// allowlisted binary load and run arbitrary code, so they are rejected in
+// caller-supplied env_extra.
+var dangerousEnvPrefixes = []string{"LD_", "DYLD_"}
+
+// checkEnvExtra rejects any env_extra key that matches a dynamic-linker prefix.
+// Comparison is case-insensitive so a differently-cased key cannot slip a
+// linker override through (the linker itself only honours the canonical case,
+// but refusing is harmless and defensive).
+func checkEnvExtra(env map[string]string) error {
+	for k := range env {
+		up := strings.ToUpper(strings.TrimSpace(k))
+		for _, p := range dangerousEnvPrefixes {
+			if strings.HasPrefix(up, p) {
+				return fmt.Errorf("environment variable %q is not allowed: dynamic-linker overrides can bypass the command allowlist", k)
+			}
+		}
+	}
+	return nil
 }
 
 func parseAllowlist(raw string) map[string]struct{} {

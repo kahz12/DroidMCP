@@ -45,6 +45,68 @@ func TestRunCommandCapturesStdoutStderr(t *testing.T) {
 	}
 }
 
+func TestRunCommandRejectsLinkerEnvExtra(t *testing.T) {
+	requireSh(t)
+	t.Setenv(allowlistEnv, "")
+
+	for _, key := range []string{"LD_PRELOAD", "LD_LIBRARY_PATH", "ld_preload", "DYLD_INSERT_LIBRARIES"} {
+		_, err := runCommand(context.Background(), execOptions{
+			Command:  "/bin/sh",
+			Args:     []string{"-c", "true"},
+			EnvExtra: map[string]string{key: "/tmp/evil.so"},
+		})
+		if err == nil || !strings.Contains(err.Error(), "not allowed") {
+			t.Errorf("env key %q should be rejected, got err=%v", key, err)
+		}
+	}
+}
+
+func TestRunCommandAllowsBenignEnvExtra(t *testing.T) {
+	requireSh(t)
+	t.Setenv(allowlistEnv, "")
+
+	res, err := runCommand(context.Background(), execOptions{
+		Command:  "/bin/sh",
+		Args:     []string{"-c", "printf %s \"$MY_VAR\""},
+		EnvExtra: map[string]string{"MY_VAR": "ok"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Stdout != "ok" {
+		t.Errorf("benign env_extra should propagate, got %q", res.Stdout)
+	}
+}
+
+func TestRunCommandTrustedSkipsEnvExtraCheck(t *testing.T) {
+	requireSh(t)
+	t.Setenv(allowlistEnv, "")
+
+	// Trusted internal callers (the termux-* wrappers) are not caller-driven, so
+	// the linker-env guard does not apply to them.
+	_, err := runCommand(context.Background(), execOptions{
+		Command:  "/bin/sh",
+		Args:     []string{"-c", "true"},
+		EnvExtra: map[string]string{"LD_PRELOAD": "/tmp/x.so"},
+		Trusted:  true,
+	})
+	if err != nil {
+		t.Errorf("trusted call should not be blocked by env guard, got %v", err)
+	}
+}
+
+func TestCheckEnvExtra(t *testing.T) {
+	if err := checkEnvExtra(map[string]string{"PATH": "/x", "FOO": "bar"}); err != nil {
+		t.Errorf("benign env should pass: %v", err)
+	}
+	if err := checkEnvExtra(map[string]string{"LD_AUDIT": "x"}); err == nil {
+		t.Error("LD_AUDIT should be rejected")
+	}
+	if err := checkEnvExtra(nil); err != nil {
+		t.Errorf("nil env should pass: %v", err)
+	}
+}
+
 func TestRunCommandPropagatesNonZeroExit(t *testing.T) {
 	requireSh(t)
 	t.Setenv(allowlistEnv, "")

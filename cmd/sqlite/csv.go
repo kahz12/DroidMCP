@@ -49,7 +49,9 @@ func handleExportCSV(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 		return mcp.NewToolResultError(fmt.Sprintf("destination %q is a directory", destRel)), nil
 	}
 
-	db, errRes := dbForQuery(rel)
+	// Read-only pool: export runs a SELECT, and mode=ro guarantees a stacked or
+	// CTE-hidden write in `sql` cannot mutate the database during the export.
+	db, errRes := dbForQuery(rel, true)
 	if errRes != nil {
 		return errRes, nil
 	}

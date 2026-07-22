@@ -237,8 +237,25 @@ func TestDismissNotification(t *testing.T) {
 	if !out.Dismissed || out.ID != "42" {
 		t.Errorf("got %+v, want dismissed=true id=42", out)
 	}
-	if argv := readArgs(); !strings.Contains(argv, "42") {
-		t.Errorf("id not passed to command: %s", argv)
+	// The id must be passed after a "--" separator so getopts in the wrapper
+	// cannot mistake a leading-dash id for an option.
+	if argv := readArgs(); !strings.Contains(argv, "--\n42") {
+		t.Errorf("id should be guarded by a -- separator: %q", argv)
+	}
+}
+
+func TestDismissNotificationDashID(t *testing.T) {
+	dir := fakeBinDir(t)
+	readArgs := captureArgs(t, dir)
+	fakeBin(t, dir, binNotifyRemove, recordArgv)
+
+	// An id that looks like a flag must still reach the command as the id.
+	got, isErr := resultText(t, mustCall(t, handleDismissNotification, map[string]any{"id": "-h"}))
+	if isErr {
+		t.Fatalf("unexpected error: %s", got)
+	}
+	if argv := readArgs(); !strings.Contains(argv, "--\n-h") {
+		t.Errorf("dash id should be passed as positional after --: %q", argv)
 	}
 }
 

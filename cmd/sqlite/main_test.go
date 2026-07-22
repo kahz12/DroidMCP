@@ -264,6 +264,48 @@ func TestQueryRejectsWrite(t *testing.T) {
 	}
 }
 
+// TestQueryReadOnlyEngineEnforced verifies the mode=ro pool blocks writes that
+// the leading-keyword check does not catch: a write stacked after a SELECT and
+// a write fronted by a CTE. Both must fail and leave the data untouched.
+func TestQueryReadOnlyEngineEnforced(t *testing.T) {
+	withRoot(t)
+	seed(t, "app.db")
+
+	sneaky := []string{
+		"SELECT 1; DELETE FROM users",            // stacked write, leading token SELECT
+		"WITH x AS (SELECT 1) DELETE FROM users", // CTE-fronted write, leading token WITH
+	}
+	for _, sql := range sneaky {
+		_, isErr := resultText(t, mustCall(t, handleQuery, map[string]any{"db": "app.db", "sql": sql}))
+		if !isErr {
+			t.Errorf("query should reject %q on a read-only handle", sql)
+		}
+		got := okText(t, handleQuery, map[string]any{"db": "app.db", "sql": "SELECT count(*) AS n FROM users"})
+		if !strings.Contains(got, `"n":2`) {
+			t.Fatalf("rows must be untouched after %q, got %s", sql, got)
+		}
+	}
+
+	// export_csv shares the read-only pool: a stacked write there is refused too.
+	dest := "out.csv"
+	_, isErr := resultText(t, mustCall(t, handleExportCSV, map[string]any{
+		"db": "app.db", "destination": dest, "sql": "SELECT 1; DELETE FROM users",
+	}))
+	if !isErr {
+		t.Errorf("export_csv should reject a stacked write")
+	}
+	got := okText(t, handleQuery, map[string]any{"db": "app.db", "sql": "SELECT count(*) AS n FROM users"})
+	if !strings.Contains(got, `"n":2`) {
+		t.Errorf("rows must survive an export_csv stacked write, got %s", got)
+	}
+
+	// The read tools still work normally on the read-only pool.
+	rows := okText(t, handleQuery, map[string]any{"db": "app.db", "sql": "SELECT name FROM users ORDER BY name"})
+	if !strings.Contains(rows, "alice") || !strings.Contains(rows, "bob") {
+		t.Errorf("read-only query should still return rows, got %s", rows)
+	}
+}
+
 func TestQueryMaxRowsTruncates(t *testing.T) {
 	withRoot(t)
 	seed(t, "app.db")

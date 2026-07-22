@@ -7,7 +7,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -15,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -50,9 +50,10 @@ func validateURL(raw string) error {
 	return validateHost(host)
 }
 
-// validateHost is the IP-policy gate. Used both at request build time
-// (validateURL) and at dial time (defense against DNS rebinding and against
-// post-redirect hosts the safe client decided to follow).
+// validateHost is the IP-policy gate applied at request build time (via
+// validateURL) and to every redirect target (safeCheckRedirect), so a bad host
+// is refused before a request is issued. The actual socket is gated separately
+// and authoritatively by safeDialControl, which checks the post-resolution IP.
 func validateHost(host string) error {
 	if allowPrivateNetworks() {
 		return nil
@@ -93,24 +94,24 @@ func isPublicIP(ip net.IP) bool {
 	return true
 }
 
-// newSafeTransport returns an http.Transport whose DialContext re-runs the
-// SSRF check at the moment we actually open the socket. This catches DNS
-// rebinding (resolve to public, dial to private) and, combined with
-// safeCheckRedirect, also catches post-redirect dials.
+// newSafeTransport returns an http.Transport whose dialer re-runs the SSRF
+// check at the moment we actually open the socket. This catches DNS rebinding
+// (resolve to public, dial to private) and, combined with safeCheckRedirect,
+// also catches post-redirect dials.
 func newSafeTransport() *http.Transport {
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+		// Control runs after DNS resolution with the concrete IP:port about to
+		// be connected, so it validates exactly the address that gets dialed.
+		// A DialContext wrapper that validated the *hostname* would re-resolve
+		// at dial time, leaving a rebinding window (validate a public answer,
+		// connect to a private one); checking here in Control closes it.
+		Control: safeDialControl,
+	}
 	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, _, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			if err := validateHost(host); err != nil {
-				return nil, err
-			}
-			return dialer.DialContext(ctx, network, addr)
-		},
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          16,
 		IdleConnTimeout:       30 * time.Second,
@@ -118,6 +119,29 @@ func newSafeTransport() *http.Transport {
 		ExpectContinueTimeout: 1 * time.Second,
 		ResponseHeaderTimeout: 15 * time.Second,
 	}
+}
+
+// safeDialControl is the net.Dialer.Control hook: it rejects the connection
+// unless the resolved IP the socket is about to reach is public (or the
+// operator opted in via DROIDMCP_SCRAPER_ALLOW_PRIVATE). Because it sees the
+// concrete post-resolution address, there is no second lookup between the check
+// and the connect for an attacker to rebind.
+func safeDialControl(_, address string, _ syscall.RawConn) error {
+	if allowPrivateNetworks() {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("dial address %q is not an IP literal", address)
+	}
+	if !isPublicIP(ip) {
+		return fmt.Errorf("%w: %s", errBlockedHost, ip.String())
+	}
+	return nil
 }
 
 // safeCheckRedirect re-validates each redirect target before the client follows

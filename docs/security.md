@@ -32,15 +32,18 @@ Mitigations the codebase currently implements:
 
 | Layer | Mitigation |
 |-------|------------|
-| Auth | Per-server / global API key checked with `crypto/subtle.ConstantTimeCompare`. `mcp-termux` and `mcp-filesystem` refuse to start without one. |
+| Auth | Per-server / global API key checked with `crypto/subtle.ConstantTimeCompare`. `mcp-filesystem`, `mcp-termux`, `mcp-media`, `mcp-sqlite` and `mcp-github` refuse to start without one. |
 | Transport | Optional TLS via `DROIDMCP_TLS_CERT` / `_KEY`; HSTS sent only when TLS is active. |
+| Host binding | Listener bound to `127.0.0.1`; every request must also present a loopback `Host` header (or one listed in `DROIDMCP_ALLOWED_HOSTS`), so a DNS-rebinding browser cannot drive the dev-mode servers. |
 | Headers | `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` on every response. |
 | Logging | `slog`-based, with credential redaction in attribute keys (`api_key`, `token`, `password`, …). |
 | `mcp-filesystem` | Requires an explicit `DROIDMCP_ROOT` and an API key. `securePath` rejects absolute paths and `..` traversal, then resolves symlinks and re-checks so a symlink under the root cannot point outside it. |
-| `mcp-scraper` | Anti-SSRF: rejects RFC1918 / loopback / link-local by default (override with `DROIDMCP_SCRAPER_ALLOW_PRIVATE=1`). |
+| `mcp-scraper` | Anti-SSRF: rejects RFC1918 / loopback / link-local by default (override with `DROIDMCP_SCRAPER_ALLOW_PRIVATE=1`), validated at the URL, on every redirect, and on the concrete resolved IP the socket dials (closes DNS rebinding). |
+| `mcp-termux` `run_command` | `env_extra` rejects dynamic-linker overrides (`LD_*`, `DYLD_*`) so a caller cannot `LD_PRELOAD` past the command allowlist. |
 | `mcp-network` | Refuses public targets by default (override with `DROIDMCP_NETWORK_ALLOW_PUBLIC=1`). |
 | `mcp-termux` | Optional allowlist via `DROIDMCP_TERMUX_ALLOWLIST=cmd1,cmd2,…`; `install_pkg` quotes the package name (`pkg install -- <name>`). |
 | `mcp-clipboard` | All inputs piped via stdin, never embedded in shell arguments. |
+| `mcp-sqlite` | Requires `DROIDMCP_ROOT` + an API key; values bind as `?` parameters; `describe_table` validates the table name against the schema before quoting it; the read tools (`query`, `list_tables`, `describe_table`, `export_csv`) run on a `mode=ro` connection so the engine rejects any write, even one stacked after a `SELECT` or fronted by a CTE. |
 
 Known gaps that operators should keep in mind (tracked in `AUDIT_REPORT.txt`):
 
@@ -60,16 +63,24 @@ Every server enforces the same scheme:
    `config.ResolveAPIKey("<server-name>")` which checks, in order:
    - `DROIDMCP_<SERVER>_KEY` (e.g. `DROIDMCP_TERMUX_KEY`)
    - `DROIDMCP_API_KEY` (global fallback)
-2. If both are unset, most servers start in **dev mode** and log
-   `auth=disabled`. Every request is accepted. Use this only on
-   loopback for local development. `mcp-termux` and `mcp-filesystem`
-   are the exceptions: they refuse to start without a key, because they
-   expose command execution and read/write filesystem access.
+2. If both are unset, the read-only / low-privilege servers start in
+   **dev mode** and log `auth=disabled`. Every request is accepted. Use
+   this only on loopback for local development. `mcp-filesystem`,
+   `mcp-termux`, `mcp-media`, `mcp-sqlite` and `mcp-github` are the
+   exceptions: they refuse to start without a key, because they expose
+   command execution, read/write filesystem/database access, or a
+   GitHub token that can read private repos and push commits.
 3. If a key is set, every inbound request must carry it in the
    `X-DroidMCP-Key` HTTP header. The comparison is constant-time.
-4. `GET /healthz` is always served unauthenticated so external
-   supervisors (systemd, k8s, docker healthchecks) can probe the
-   server without holding the key.
+4. Independently of the key, every request's `Host` header must name a
+   loopback destination (`localhost`, `127.0.0.1`, `::1`) or a hostname
+   listed in `DROIDMCP_ALLOWED_HOSTS` (comma-separated, no port — set it
+   when fronting the server with a reverse proxy or port-forward).
+   Requests with any other `Host` get `403`, which stops a malicious web
+   page from reaching a dev-mode server via DNS rebinding.
+5. `GET /healthz` is served without the API key so external supervisors
+   (systemd, k8s, docker healthchecks) can probe the server; the loopback
+   `Host` check still applies.
 
 Per-server keys override the global one, so you can give a different
 client a different key per MCP:
@@ -214,7 +225,7 @@ Older entries are evicted FIFO when either cap is reached.
 ## `mcp-termux` allowlist
 
 `mcp-termux` exposes `run_command`, which is effectively a remote
-shell. Two safeguards exist:
+shell. Three safeguards exist:
 
 - `install_pkg` quotes the package name (`pkg install -- <name>`) so
   flags injected via the package field cannot reach `pkg`.
@@ -230,6 +241,16 @@ shell. Two safeguards exist:
   `termux-sms-send`, `termux-tts-speak`) bypass the allowlist on
   purpose — those are explicit tools and the operator opted in by
   starting the server.
+- `run_command`'s `env_extra` refuses dynamic-linker overrides
+  (`LD_*`, `DYLD_*`): otherwise a caller could `LD_PRELOAD` arbitrary
+  code into an allowlisted, benign binary and sidestep the allowlist.
+  An operator that genuinely needs such a variable can set it in the
+  server's own environment, which the child still inherits.
+
+Even so, keep in mind the allowlist is a coarse control: many
+legitimately-allowlisted programs (`sh`, `python`, `find`, `git`) can
+themselves run other code, so treat the allowlist as reducing blast
+radius, not as a strict sandbox.
 
 If you do not need shell access, do not start `droidmcp-termux`.
 

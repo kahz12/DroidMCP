@@ -48,7 +48,7 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 | Servidor | Puerto | Enfoque | Requiere |
 |----------|:---:|---------|----------|
 | `mcp-filesystem` | `3000` | Operaciones de archivos en sandbox, con protección contra path traversal | `DROIDMCP_ROOT` + key |
-| `mcp-github` | `3001` | API completa de GitHub vía Personal Access Token | `GITHUB_TOKEN` |
+| `mcp-github` | `3001` | API completa de GitHub vía Personal Access Token | `GITHUB_TOKEN` + key |
 | `mcp-scraper` | `3002` | Web scraping y extracción sin Chromium | — |
 | `mcp-termux` | `3003` | Ejecución de shell y gestión de paquetes | key |
 | `mcp-network` | `3004` | Descubrimiento de LAN y escaneo de puertos | — |

@@ -63,9 +63,17 @@ a supervisor can probe it without holding the key:
 must send it in the `X-DroidMCP-Key` header. The comparison is constant-time.
 The key is resolved per server: `DROIDMCP_<SERVER>_KEY` is checked first (for
 example `DROIDMCP_TERMUX_KEY`), then the global `DROIDMCP_API_KEY`. With no key
-set, most servers run in **dev mode** — they accept every request and log
-`auth=disabled` at startup. `mcp-filesystem`, `mcp-termux`, `mcp-media`, and
-`mcp-sqlite` have no dev mode: they refuse to start without a key.
+set, the low-privilege servers run in **dev mode** — they accept every request
+and log `auth=disabled` at startup. `mcp-filesystem`, `mcp-termux`, `mcp-media`,
+`mcp-sqlite`, and `mcp-github` have no dev mode: they refuse to start without a
+key.
+
+**Host binding.** The listener is bound to `127.0.0.1`, and every request's
+`Host` header must name a loopback destination (`localhost`, `127.0.0.1`, `::1`)
+or a hostname in `DROIDMCP_ALLOWED_HOSTS`. Anything else gets `403`, so a
+malicious web page cannot reach a dev-mode server through DNS rebinding. Set
+`DROIDMCP_ALLOWED_HOSTS` (comma-separated, no port) when a reverse proxy or
+port-forward fronts the server under another hostname.
 
 **TLS.** Set both `DROIDMCP_TLS_CERT` and `DROIDMCP_TLS_KEY` to PEM files and the
 server serves HTTPS and adds an HSTS header. If only one is set, it falls back
@@ -145,8 +153,9 @@ launching the binary.
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `DROIDMCP_PORT` | `3000` | TCP port for the SSE listener. Must be `1`–`65535` or the server refuses to start. |
-| `DROIDMCP_API_KEY` | unset | Global key required in `X-DroidMCP-Key`. Unset means dev mode (except filesystem/termux). |
+| `DROIDMCP_API_KEY` | unset | Global key required in `X-DroidMCP-Key`. Unset means dev mode (except filesystem/termux/media/sqlite/github). |
 | `DROIDMCP_<SERVER>_KEY` | unset | Per-server override, e.g. `DROIDMCP_GITHUB_KEY`. Wins over the global key. |
+| `DROIDMCP_ALLOWED_HOSTS` | unset | Extra `Host` header values accepted besides loopback (comma-separated, no port). For reverse-proxy / port-forward front-ends. |
 | `DROIDMCP_TLS_CERT` | unset | PEM certificate path. Both cert and key must be set to enable HTTPS + HSTS. |
 | `DROIDMCP_TLS_KEY` | unset | PEM private key path. |
 | `DROIDMCP_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
@@ -162,6 +171,7 @@ launching the binary.
 | `GITHUB_TOKEN` | github | none (required) | Personal Access Token. See the three accepted names below. |
 | `GITHUB_APP_TOKEN` | github | — | Used if `GITHUB_TOKEN` is unset. |
 | `GITHUB_FINE_GRAINED_TOKEN` | github | — | Used if the two above are unset. |
+| `DROIDMCP_GITHUB_KEY` | github | unset | Required (this or `DROIDMCP_API_KEY`); no dev mode — the token grants full GitHub API access. |
 | `DROIDMCP_SCRAPER_ALLOW_PRIVATE` | scraper | off | Set to `1` to allow loopback / RFC1918 / link-local / CGNAT targets. Off by default for SSRF safety. |
 | `DROIDMCP_TERMUX_KEY` | termux | unset | Required (this or `DROIDMCP_API_KEY`); no dev mode. |
 | `DROIDMCP_TERMUX_ALLOWLIST` | termux | empty (allow all) | Comma-separated allowlist for `run_command`. Matches the full command or its basename. |
@@ -323,7 +333,9 @@ are preserved; symlinks encountered during a directory copy are skipped.
 
 ### mcp-github
 
-Full GitHub operations via a token, built on `google/go-github`. List calls
+Full GitHub operations via a token, built on `google/go-github`. Because the
+token can read private repos and push commits/PRs, this server **requires a key
+and has no dev mode** (`DROIDMCP_GITHUB_KEY` or `DROIDMCP_API_KEY`). List calls
 accept `per_page` (max 100, default 30) and `page` (default 1); responses embed
 a `_rate_limit` block, and a rate-limit error surfaces the reset time so an
 agent can back off. `owner` and `repo` are required on every repo-scoped tool.
@@ -429,11 +441,14 @@ stream is capped at 1 MiB.
 | `command` | string | yes | — | The program to execute (no shell). |
 | `args` | string[] | no | `[]` | Arguments passed to the program. |
 | `cwd` | string | no | — | Working directory for the child process. |
+| `env_extra` | object | no | — | Extra environment variables on top of the parent env. Dynamic-linker overrides (`LD_*`, `DYLD_*`) are rejected — they could bypass the allowlist. |
 | `timeout_seconds` | number | no | `30` | Per-call timeout. Max `300`. |
 
 When `DROIDMCP_TERMUX_ALLOWLIST` is set, `command` must match one of its
 comma-separated entries (by full value or basename) or the call is refused. An
-empty/unset allowlist allows any command.
+empty/unset allowlist allows any command. Note that the allowlist is a coarse
+control: an allowlisted interpreter (`sh`, `python`, …) can still run other
+code, so treat it as reducing blast radius rather than a strict sandbox.
 
 **`install_pkg`** — install a package via `pkg install -y`.
 
@@ -662,12 +677,14 @@ optional; the other tools open an existing database lazily.
 |----------|------|:---:|-------------|
 | `db` | string | yes | Database file path relative to root, e.g. `data/app.db`. |
 
-**`query`** — run a read-only statement and return its rows. The leading keyword
-must be `SELECT`, `WITH`, `PRAGMA`, `EXPLAIN`, or `VALUES`; a write statement is
-rejected (use `execute`). Returns `{columns, rows, count, truncated}`, where
-`rows` is a JSON array of column-keyed objects and `truncated` is `true` when
-more rows existed than `max_rows` allowed. TEXT/BLOB values are returned as
-strings.
+**`query`** — run a read-only statement and return its rows. It executes on a
+connection opened read-only (`mode=ro`), so the SQLite engine rejects any write
+— including one stacked after a `SELECT` (`SELECT 1; DELETE …`) or fronted by a
+CTE (`WITH … DELETE …`); the leading-keyword check (`SELECT`, `WITH`, `PRAGMA`,
+`EXPLAIN`, `VALUES`) is just a friendlier early error pointing you at `execute`.
+Returns `{columns, rows, count, truncated}`, where `rows` is a JSON array of
+column-keyed objects and `truncated` is `true` when more rows existed than
+`max_rows` allowed. TEXT/BLOB values are returned as strings.
 
 | Argument | Type | Required | Default | Description |
 |----------|------|:---:|---------|-------------|
@@ -707,10 +724,11 @@ injection vector. Returns `{table, columns}` where each column is
 | `table` | string | yes | Name of the table or view to describe. |
 
 **`export_csv`** — run a read statement and stream its results into a CSV file
-under root (a header row plus one row per record). Returns
-`{path, rows, columns}`. The destination's parent directories are created; a
-failure mid-stream removes only a file this call created, never pre-existing data,
-and the destination must differ from the source database.
+under root (a header row plus one row per record). Like `query` it runs on a
+read-only (`mode=ro`) connection, so a write cannot slip in through the `sql`
+argument. Returns `{path, rows, columns}`. The destination's parent directories
+are created; a failure mid-stream removes only a file this call created, never
+pre-existing data, and the destination must differ from the source database.
 
 | Argument | Type | Required | Default | Description |
 |----------|------|:---:|---------|-------------|
@@ -861,7 +879,8 @@ with `export_csv`.
 | Symptom | Cause and fix |
 |---------|---------------|
 | Server exits immediately, logs `requires DROIDMCP_ROOT` | `mcp-filesystem`, `mcp-media`, or `mcp-sqlite` was started without `DROIDMCP_ROOT`. Set it to a real directory. |
-| Server exits, logs `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux`/`mcp-media`/`mcp-sqlite` need a key. Set one; they have no dev mode. |
+| Server exits, logs `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux`/`mcp-media`/`mcp-sqlite`/`mcp-github` need a key. Set one; they have no dev mode. |
+| Clients get `403 forbidden host` | The request's `Host` header is not loopback. Connect via `localhost`/`127.0.0.1`/`::1`, or add the front-end hostname to `DROIDMCP_ALLOWED_HOSTS`. |
 | Server exits, logs `DROIDMCP_PORT out of range` or `not a directory` | Config validation failed. Port must be `1`–`65535`; `DROIDMCP_ROOT` must exist and be a directory. |
 | Clients get `401 unauthorized` | A key is configured but the client isn't sending `X-DroidMCP-Key`, or it doesn't match. `/healthz` is exempt, so a working health probe with failing tool calls points at the header. |
 | `mcp-github` won't start, `token validation failed` | The token is missing, expired, or lacks scope. Set `GITHUB_TOKEN` (or `GITHUB_APP_TOKEN` / `GITHUB_FINE_GRAINED_TOKEN`). |

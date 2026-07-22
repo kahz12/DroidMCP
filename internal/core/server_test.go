@@ -25,7 +25,7 @@ func TestHealthzReturnsJSONAndBypassesAuth(t *testing.T) {
 	ds := newTestServer("super-secret")
 	h := buildHandler(ds, false, http.NotFoundHandler())
 
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/healthz", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -50,7 +50,7 @@ func TestSecurityHeadersAlwaysSet(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/anything", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/anything", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -71,7 +71,7 @@ func TestSecurityHeadersHSTSOnlyWithTLS(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/anything", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/anything", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -221,5 +221,83 @@ func TestPipelineProtectedRouteRequiresKey(t *testing.T) {
 	body, _ := io.ReadAll(resp2.Body)
 	if string(body) != "inside" {
 		t.Errorf("body: %q", body)
+	}
+}
+
+func TestHostGuardRejectsNonLoopback(t *testing.T) {
+	ds := newTestServer("")
+	reached := false
+	h := buildHandler(ds, false, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// A rebinding browser would present its own domain as the Host header.
+	req := httptest.NewRequest(http.MethodGet, "http://evil.example.com/anything", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("non-loopback Host should be 403, got %d", w.Code)
+	}
+	if reached {
+		t.Error("handler must not run for a rejected Host")
+	}
+}
+
+func TestHostGuardAllowsLoopbackForms(t *testing.T) {
+	ds := newTestServer("")
+	h := buildHandler(ds, false, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, host := range []string{"127.0.0.1", "127.0.0.1:3000", "localhost:8080", "[::1]:9000", "127.5.6.7"} {
+		req := httptest.NewRequest(http.MethodGet, "http://placeholder/anything", nil)
+		req.Host = host
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("Host %q should be allowed, got %d", host, w.Code)
+		}
+	}
+}
+
+func TestHostGuardEnvAllowlist(t *testing.T) {
+	t.Setenv(envAllowedHosts, "proxy.internal, mcp.example")
+	ds := newTestServer("")
+	h := buildHandler(ds, false, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "http://mcp.example/anything", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("allowlisted Host should pass, got %d", w.Code)
+	}
+
+	// A host outside both loopback and the allowlist is still rejected.
+	req2 := httptest.NewRequest(http.MethodGet, "http://other.example/anything", nil)
+	w2 := httptest.NewRecorder()
+	h.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusForbidden {
+		t.Errorf("non-allowlisted Host should be 403, got %d", w2.Code)
+	}
+}
+
+func TestHostnameOnly(t *testing.T) {
+	cases := map[string]string{
+		"127.0.0.1:3000": "127.0.0.1",
+		"127.0.0.1":      "127.0.0.1",
+		"localhost:8080": "localhost",
+		"[::1]:9000":     "::1",
+		"::1":            "::1",
+		"[::1]":          "::1",
+		"":               "",
+	}
+	for in, want := range cases {
+		if got := hostnameOnly(in); got != want {
+			t.Errorf("hostnameOnly(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

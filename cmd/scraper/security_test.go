@@ -88,3 +88,37 @@ func TestValidateHostMessage(t *testing.T) {
 		t.Fatalf("expected error mentioning the address, got %v", err)
 	}
 }
+
+func TestSafeDialControlBlocksPrivateResolvedIP(t *testing.T) {
+	t.Setenv("DROIDMCP_SCRAPER_ALLOW_PRIVATE", "")
+	// safeDialControl sees the concrete post-resolution address, so a name that
+	// rebinds to a private IP after passing validateURL is still refused here.
+	for _, addr := range []string{"10.0.0.5:80", "127.0.0.1:443", "169.254.1.1:80", "100.64.0.1:80", "[::1]:80"} {
+		if err := safeDialControl("tcp", addr, nil); err == nil {
+			t.Errorf("expected %q to be blocked at dial control", addr)
+		}
+	}
+}
+
+func TestSafeDialControlAllowsPublicIP(t *testing.T) {
+	t.Setenv("DROIDMCP_SCRAPER_ALLOW_PRIVATE", "")
+	for _, addr := range []string{"8.8.8.8:443", "1.1.1.1:80"} {
+		if err := safeDialControl("tcp", addr, nil); err != nil {
+			t.Errorf("public %q should be allowed, got %v", addr, err)
+		}
+	}
+}
+
+func TestSafeDialControlAllowPrivateOptIn(t *testing.T) {
+	t.Setenv("DROIDMCP_SCRAPER_ALLOW_PRIVATE", "1")
+	if err := safeDialControl("tcp", "10.0.0.5:80", nil); err != nil {
+		t.Errorf("opt-in should permit private dial, got %v", err)
+	}
+}
+
+func TestSafeDialControlRejectsNonIP(t *testing.T) {
+	t.Setenv("DROIDMCP_SCRAPER_ALLOW_PRIVATE", "")
+	if err := safeDialControl("tcp", "not-an-address", nil); err == nil {
+		t.Error("a malformed dial address should error")
+	}
+}

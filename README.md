@@ -48,7 +48,7 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
 | Server | Port | Focus | Requires |
 |--------|:---:|-------|----------|
 | `mcp-filesystem` | `3000` | Sandboxed file operations with path-traversal protection | `DROIDMCP_ROOT` + key |
-| `mcp-github` | `3001` | Full GitHub API via Personal Access Token | `GITHUB_TOKEN` |
+| `mcp-github` | `3001` | Full GitHub API via Personal Access Token | `GITHUB_TOKEN` + key |
 | `mcp-scraper` | `3002` | Chromium-free web scraping and extraction | — |
 | `mcp-termux` | `3003` | Shell execution and package management | key |
 | `mcp-network` | `3004` | LAN discovery and port scanning | — |

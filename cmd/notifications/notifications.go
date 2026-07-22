@@ -86,7 +86,9 @@ func handleDismissNotification(ctx context.Context, req mcp.CallToolRequest) (*m
 	if err := ensureBinaries(binNotifyRemove); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	res, err := runCmd(ctx, binNotifyRemove, []string{id}, reqTimeout(req, defaultExecTimeout))
+	// Pass id after a "--" separator so an id beginning with "-" is treated as
+	// the positional argument, not parsed as an option by the wrapper's getopts.
+	res, err := runCmd(ctx, binNotifyRemove, []string{"--", id}, reqTimeout(req, defaultExecTimeout))
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}

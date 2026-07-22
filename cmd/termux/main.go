@@ -57,7 +57,7 @@ func registerTools(s *core.DroidServer) {
 		mcp.WithArray("args", mcp.WithStringItems(),
 			mcp.Description("Arguments, one per element (preserves spaces and metacharacters in each arg)")),
 		mcp.WithString("cwd", mcp.Description("Working directory for the child process")),
-		mcp.WithObject("env_extra", mcp.Description("Extra environment variables to set on top of the parent env")),
+		mcp.WithObject("env_extra", mcp.Description("Extra environment variables to set on top of the parent env. Dynamic-linker overrides (LD_*, DYLD_*) are rejected.")),
 		mcp.WithNumber("timeout_seconds", mcp.Description("Per-call timeout. Default 30s, max 300s.")),
 	), handleRunCommand)
 

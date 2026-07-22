@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -41,6 +42,11 @@ const (
 	envTLSKey  = "DROIDMCP_TLS_KEY"
 )
 
+// envAllowedHosts optionally extends the always-allowed loopback Host names
+// with operator-supplied hostnames (comma-separated, no port), for
+// reverse-proxy or port-forward front-ends. See hostGuard.
+const envAllowedHosts = "DROIDMCP_ALLOWED_HOSTS"
+
 // DroidServer wraps the MCP server to provide common transport initialization.
 type DroidServer struct {
 	MCPServer *server.MCPServer
@@ -68,10 +74,11 @@ func NewDroidServer(name, version string) *DroidServer {
 
 // ServeSSE starts the server using the SSE (Server-Sent Events) transport.
 // The listener is always bound to 127.0.0.1 so the server is unreachable from
-// external network interfaces. All routes (SSE and message endpoints) are
-// wrapped in the API key middleware; /healthz is exposed unauthenticated for
-// supervisors. TLS is enabled when both DROIDMCP_TLS_CERT and DROIDMCP_TLS_KEY
-// are set.
+// external network interfaces. Every request must also carry a loopback Host
+// header (hostGuard) so a rebinding browser cannot reach the dev-mode servers.
+// All routes (SSE and message endpoints) are wrapped in the API key middleware;
+// /healthz is exposed unauthenticated for supervisors. TLS is enabled when both
+// DROIDMCP_TLS_CERT and DROIDMCP_TLS_KEY are set.
 func (s *DroidServer) ServeSSE(port int) error {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 
@@ -141,7 +148,72 @@ func buildHandler(s *DroidServer, tlsEnabled bool, sseHandler http.Handler) http
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.Handle("/", authMiddleware(s.APIKey, sseHandler))
-	return requestLogger(securityHeaders(tlsEnabled, mux))
+	guarded := hostGuard(parseAllowedHosts(os.Getenv(envAllowedHosts)), mux)
+	return requestLogger(securityHeaders(tlsEnabled, guarded))
+}
+
+// parseAllowedHosts turns the comma-separated DROIDMCP_ALLOWED_HOSTS value into
+// a lowercased set of extra hostnames permitted in the Host header, on top of
+// the always-allowed loopback names. Empty entries are ignored.
+func parseAllowedHosts(raw string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, h := range strings.Split(raw, ",") {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			out[h] = struct{}{}
+		}
+	}
+	return out
+}
+
+// hostGuard rejects requests whose Host header is neither a loopback
+// destination nor in the operator-configured allowlist. The listener only
+// binds 127.0.0.1, but a browser tricked into DNS rebinding can still reach it
+// with an attacker-chosen Host; pinning Host to loopback closes that vector,
+// which matters most for the key-less (dev-mode) servers where auth would not
+// otherwise stop it. Reverse-proxy / port-forward front-ends can add their
+// external hostname via DROIDMCP_ALLOWED_HOSTS.
+func hostGuard(extra map[string]struct{}, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hostAllowed(r.Host, extra) {
+			logger.Log.Warn("host rejected",
+				"remote", r.RemoteAddr, "host", r.Host, "path", r.URL.Path)
+			http.Error(w, "forbidden host", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hostAllowed reports whether the Host header names a loopback destination
+// ("localhost" or any loopback IP literal) or an operator-allowed hostname.
+func hostAllowed(host string, extra map[string]struct{}) bool {
+	name := hostnameOnly(host)
+	if name == "" {
+		return false
+	}
+	if strings.EqualFold(name, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(name); ip != nil {
+		return ip.IsLoopback()
+	}
+	_, ok := extra[strings.ToLower(name)]
+	return ok
+}
+
+// hostnameOnly strips an optional port and IPv6 brackets from a Host header
+// value, returning just the hostname/IP.
+func hostnameOnly(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+	return host
 }
 
 // handleHealthz responds with a small JSON document identifying the server.

@@ -56,8 +56,18 @@ func main() {
 		logger.Fatal("GitHub token validation failed", err, "source", source)
 	}
 
+	// mcp-github drives the GitHub API with a token that can read private repos
+	// and push commits/PRs, so it must not run unauthenticated: anything else on
+	// localhost (other apps, adb) could otherwise operate GitHub as the user.
+	// Require an API key, mirroring mcp-filesystem / mcp-termux.
+	apiKey := config.ResolveAPIKey("github")
+	if apiKey == "" {
+		logger.Log.Error("mcp-github holds a GitHub token with full API access; refusing to start without DROIDMCP_GITHUB_KEY or DROIDMCP_API_KEY.")
+		os.Exit(1)
+	}
+
 	server := core.NewDroidServer("mcp-github", buildinfo.Version)
-	server.APIKey = config.ResolveAPIKey("github")
+	server.APIKey = apiKey
 	registerTools(server)
 
 	if err := server.ServeSSE(cfg.Port); err != nil {
