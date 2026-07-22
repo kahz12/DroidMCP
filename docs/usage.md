@@ -25,6 +25,7 @@ Versión en español: [`usage.es.md`](usage.es.md).
   - [mcp-sqlite](#mcp-sqlite)
   - [mcp-sensors](#mcp-sensors)
   - [mcp-notifications](#mcp-notifications)
+  - [mcp-contacts](#mcp-contacts)
 - [Recipes](#recipes)
 - [Troubleshooting](#troubleshooting)
 
@@ -140,6 +141,7 @@ the binaries at device boot. A convention that matches the rest of the docs:
 | sqlite | `3007` | `droidmcp-sqlite` |
 | sensors | `3008` | `droidmcp-sensors` |
 | notifications | `3009` | `droidmcp-notifications` |
+| contacts | `3010` | `droidmcp-contacts` |
 
 ---
 
@@ -825,6 +827,66 @@ this reads `global zen_mode` from the Android settings provider and returns
 `{dnd_enabled, mode, zen_mode, source}`, where `mode` is `off`,
 `priority_only`, `total_silence`, or `alarms_only`. On devices that restrict the
 settings provider the tool errors with an explanation instead of guessing.
+
+---
+
+### mcp-contacts
+
+Read-only access to the Android address book through Termux:API
+(`termux-contact-list`). Every tool needs the `termux-api` package
+(`pkg install termux-api`) plus the Termux:API Android app, and Contacts
+permission granted to it; a missing piece surfaces as an install hint. The
+backend command takes **no arguments** — every filter (`query`, `name`,
+`number`) is applied in memory, so nothing a caller types ever reaches a command
+line. All tools are read-only, so — like `mcp-sensors` — the server allows
+key-less dev mode on localhost (set `DROIDMCP_CONTACTS_KEY` or
+`DROIDMCP_API_KEY` to require auth). Because the address book is personal data,
+prefer running this server with a key outside local development. The tools that
+call the backend accept `timeout_seconds` (default 15s, max 120s).
+
+Termux:API's `ContactList` reports a `name` and a single phone `number` per
+entry; those are the fields every tool returns.
+
+**`search_contacts`** — filter the address book. `query` matches as a
+case-insensitive substring of the contact name, or against the phone number with
+spaces, dashes, dots and parentheses ignored on both sides. Returns
+`{count, contacts:[{name, number}, …]}`.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `query` | string | yes | — | Text matched against name or number. |
+| `limit` | number | no | `50` | Max contacts returned. Clamped to `1`–`500`. |
+| `timeout_seconds` | number | no | `15` | Per-call timeout. Max `120`. |
+
+**`get_contact`** — fetch full records for a specific contact. Provide `name`
+(exact, case-insensitive) and/or `number` (formatting ignored); at least one is
+required and, when both are given, both must match. Returns
+`{found, count, contacts:[…]}` — an array, since several entries can share a
+name. `found` is `false` with an empty array when nothing matches (not an
+error).
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `name` | string | one of name/number | — | Exact contact name (case-insensitive). |
+| `number` | string | one of name/number | — | Exact phone number (formatting ignored). |
+| `timeout_seconds` | number | no | `15` | Per-call timeout. Max `120`. |
+
+**`list_groups`** — documented stub. Termux:API exposes no contact-groups
+endpoint, so this returns `{supported:false, groups:[], note}` rather than
+fabricated data. Use `search_contacts` or `export_contacts` instead.
+
+**`export_contacts`** — export the address book, optionally filtered by `query`
+(same matching as `search_contacts`), as JSON or vCard 3.0. `format` is `json`
+(default) — returns `{format, count, contacts:[…]}` — or `vcard`, which returns
+`{format, count, vcard}` where `vcard` is ready-to-save `.vcf` text (each record
+`BEGIN:VCARD`/`VERSION:3.0`/`FN`/`TEL`/`END:VCARD`, with values escaped per
+RFC 6350). Contacts without a number omit the `TEL` line.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `format` | string | no | `json` | `json` or `vcard`. |
+| `query` | string | no | — | Optional filter; matches name or number. |
+| `timeout_seconds` | number | no | `15` | Per-call timeout. Max `120`. |
 
 ---
 

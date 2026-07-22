@@ -21,9 +21,9 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 
 ## De un vistazo
 
-| Cero dependencias | Seguro por defecto | Diez servidores enfocados |
+| Cero dependencias | Seguro por defecto | Once servidores enfocados |
 |:---|:---|:---|
-| Un binario ARM64 estático por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios, SQLite, sensores del dispositivo y notificaciones — cada uno tras una superficie de tools pequeña y auditable. |
+| Un binario ARM64 estático por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios, SQLite, sensores del dispositivo, notificaciones y contactos — cada uno tras una superficie de tools pequeña y auditable. |
 
 ```
    Claude Code · Gemini CLI · cualquier cliente MCP
@@ -40,6 +40,8 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
        │   media    │   sqlite   │  sensors   │
        ├────────────┴────────────┴────────────┤
        │            notifications             │
+       ├──────────────────────────────────────┤
+       │               contacts               │
        └──────────────────────────────────────┘
 ```
 
@@ -57,6 +59,7 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 | `mcp-sqlite` | `3007` | Bases de datos SQLite locales, Go puro — sin CGO | `DROIDMCP_ROOT` + key |
 | `mcp-sensors` | `3008` | Sensores del dispositivo: batería, ubicación, WiFi, brillo, volumen | `termux-api` |
 | `mcp-notifications` | `3009` | Notificaciones de Android y estado de No molestar | `termux-api` |
+| `mcp-contacts` | `3010` | Agenda de solo lectura: búsqueda, exportación (JSON/vCard) | `termux-api` |
 
 Despliega un servidor para ver su lista de tools; la referencia completa por
 tool, con argumentos y ejemplos, está en la [guía de uso](docs/usage.es.md).
@@ -236,6 +239,26 @@ dispositivos.
 
 </details>
 
+<details>
+<summary><b>mcp-contacts</b> — agenda de Android de solo lectura (requiere Termux:API)</summary>
+<br>
+
+Requiere el paquete `termux-api` y la app Android Termux:API, con el permiso de
+Contactos concedido. De solo lectura, así que se permite modo dev sin key en
+localhost; se recomienda una key porque la agenda es información personal. El
+comando de backend no toma argumentos — cada filtro se aplica en memoria, así que
+nada de lo que escriba quien llama llega a una línea de comandos. `list_groups`
+es un stub documentado (Termux:API no tiene endpoint de grupos).
+
+| Tool | Descripción |
+|------|-------------|
+| `search_contacts` | Filtra por nombre o número (subcadena, insensible al formato) |
+| `get_contact` | Registros completos para un nombre y/o número exacto |
+| `list_groups` | Stub: los grupos no están disponibles vía Termux:API |
+| `export_contacts` | Exporta (opcionalmente filtrado) como JSON o vCard 3.0 |
+
+</details>
+
 ## Inicio rápido
 
 **Desde una release** — cada release incluye un binario por servidor más un
@@ -343,7 +366,7 @@ El modelo de amenazas completo y el checklist de producción están en
 ```
 cmd/<servidor>/     un paquete main por servidor (filesystem, github, scraper,
                     termux, network, clipboard, media, sqlite, sensors,
-                    notifications)
+                    notifications, contacts)
 internal/           core — servidor HTTP/SSE compartido · config · logger · buildinfo
 docs/               guía de uso (EN/ES) · seguridad · puesta a punto de Termux
 scripts/            compilación cruzada ARM64 reproducible

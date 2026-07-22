@@ -275,24 +275,25 @@ DroidMCP/
 
 ---
 
-### PHASE 9 — mcp-contacts
+### PHASE 9 — mcp-contacts [DONE]
 > **Goal:** Read-only access to Android contacts for AI-assisted workflows
 
 #### MCP Tools
 | Tool                | Description                                  |
 |---------------------|----------------------------------------------|
-| `search_contacts`   | Search contacts by name, phone, or email     |
+| `search_contacts`   | Search contacts by name or phone             |
 | `get_contact`       | Get full details of a contact                |
 | `list_groups`       | List contact groups                          |
 | `export_contacts`   | Export contacts as vCard/JSON                |
 
 #### Tasks
-- [ ] Integrate `termux-contact-list` for full contact retrieval
-- [ ] Implement `search_contacts` with in-memory filtering by name, phone, and email
-- [ ] Implement `get_contact` returning structured JSON with all available fields
-- [ ] Implement `list_groups` (stub if not supported by Termux API)
-- [ ] Implement `export_contacts` serializing results to vCard or JSON format
-- [ ] Integration into build pipeline (Makefile/scripts)
+- [x] Integrate `termux-contact-list` for contact retrieval (backend takes no args; all filtering is in memory, so no injection surface)
+- [x] Implement `search_contacts` with in-memory filtering by name and phone number (formatting-insensitive)
+- [x] Implement `get_contact` returning structured JSON with all available fields (Termux:API `ContactList` exposes name + number)
+- [x] Implement `list_groups` as a documented stub — Termux:API has no contact-groups endpoint
+- [x] Implement `export_contacts` serializing results to vCard 3.0 (RFC 6350-escaped) or JSON
+- [x] Integration into build pipeline (Makefile / `scripts/build-arm64.sh` / release workflow)
+- [x] Documentation: server tables in both READMEs and a full `### mcp-contacts` section in `docs/usage.md` + `docs/usage.es.md`
 
 ---
 

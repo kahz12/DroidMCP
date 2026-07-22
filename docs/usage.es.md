@@ -27,6 +27,7 @@ de producción, ver [`security.md`](security.md). Versión en inglés:
   - [mcp-sqlite](#mcp-sqlite)
   - [mcp-sensors](#mcp-sensors)
   - [mcp-notifications](#mcp-notifications)
+  - [mcp-contacts](#mcp-contacts)
 - [Recetas](#recetas)
 - [Resolución de problemas](#resolución-de-problemas)
 
@@ -146,6 +147,7 @@ el resto de la documentación:
 | sqlite | `3007` | `droidmcp-sqlite` |
 | sensors | `3008` | `droidmcp-sensors` |
 | notifications | `3009` | `droidmcp-notifications` |
+| contacts | `3010` | `droidmcp-contacts` |
 
 ---
 
@@ -855,6 +857,68 @@ molestar, así que esto lee `global zen_mode` del proveedor de ajustes de Androi
 y devuelve `{dnd_enabled, mode, zen_mode, source}`, donde `mode` es `off`,
 `priority_only`, `total_silence` o `alarms_only`. En dispositivos que restringen
 el proveedor de ajustes la tool falla con una explicación en lugar de adivinar.
+
+---
+
+### mcp-contacts
+
+Acceso de solo lectura a la agenda de Android a través de Termux:API
+(`termux-contact-list`). Cada tool necesita el paquete `termux-api`
+(`pkg install termux-api`) más la app Android Termux:API, con el permiso de
+Contactos concedido; una pieza que falte aparece como una pista de instalación.
+El comando de backend **no toma argumentos** — cada filtro (`query`, `name`,
+`number`) se aplica en memoria, así que nada de lo que escriba quien llama llega
+jamás a una línea de comandos. Todas las tools son de solo lectura, así que —
+como `mcp-sensors` — el servidor permite modo dev sin key en localhost (define
+`DROIDMCP_CONTACTS_KEY` o `DROIDMCP_API_KEY` para exigir auth). Como la agenda es
+información personal, conviene ejecutar este servidor con key fuera del
+desarrollo local. Las tools que llaman al backend aceptan `timeout_seconds` (por
+defecto 15s, máx. 120s).
+
+El `ContactList` de Termux:API reporta un `name` y un único `number` de teléfono
+por entrada; esos son los campos que devuelve cada tool.
+
+**`search_contacts`** — filtra la agenda. `query` coincide como subcadena sin
+distinguir mayúsculas del nombre, o contra el número de teléfono ignorando
+espacios, guiones, puntos y paréntesis en ambos lados. Devuelve
+`{count, contacts:[{name, number}, …]}`.
+
+| Argumento | Tipo | Requerido | Defecto | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `query` | string | sí | — | Texto a coincidir contra nombre o número. |
+| `limit` | number | no | `50` | Máx. contactos devueltos. Acotado a `1`–`500`. |
+| `timeout_seconds` | number | no | `15` | Timeout por llamada. Máx. `120`. |
+
+**`get_contact`** — obtiene los registros completos de un contacto concreto. Pasa
+`name` (exacto, sin distinguir mayúsculas) y/o `number` (formato ignorado); al
+menos uno es requerido y, cuando se dan ambos, ambos deben coincidir. Devuelve
+`{found, count, contacts:[…]}` — un array, ya que varias entradas pueden
+compartir nombre. `found` es `false` con un array vacío cuando no hay
+coincidencia (no es un error).
+
+| Argumento | Tipo | Requerido | Defecto | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `name` | string | uno de name/number | — | Nombre exacto (sin distinguir mayúsculas). |
+| `number` | string | uno de name/number | — | Número exacto (formato ignorado). |
+| `timeout_seconds` | number | no | `15` | Timeout por llamada. Máx. `120`. |
+
+**`list_groups`** — stub documentado. Termux:API no expone un endpoint de grupos
+de contactos, así que esto devuelve `{supported:false, groups:[], note}` en lugar
+de datos inventados. Usa `search_contacts` o `export_contacts` en su lugar.
+
+**`export_contacts`** — exporta la agenda, opcionalmente filtrada por `query`
+(mismo emparejamiento que `search_contacts`), como JSON o vCard 3.0. `format` es
+`json` (defecto) — devuelve `{format, count, contacts:[…]}` — o `vcard`, que
+devuelve `{format, count, vcard}` donde `vcard` es texto `.vcf` listo para
+guardar (cada registro `BEGIN:VCARD`/`VERSION:3.0`/`FN`/`TEL`/`END:VCARD`, con
+los valores escapados según RFC 6350). Los contactos sin número omiten la línea
+`TEL`.
+
+| Argumento | Tipo | Requerido | Defecto | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `format` | string | no | `json` | `json` o `vcard`. |
+| `query` | string | no | — | Filtro opcional; coincide contra nombre o número. |
+| `timeout_seconds` | number | no | `15` | Timeout por llamada. Máx. `120`. |
 
 ---
 

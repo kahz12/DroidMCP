@@ -44,6 +44,7 @@ Mitigations the codebase currently implements:
 | `mcp-termux` | Optional allowlist via `DROIDMCP_TERMUX_ALLOWLIST=cmd1,cmd2,…`; `install_pkg` quotes the package name (`pkg install -- <name>`). |
 | `mcp-clipboard` | All inputs piped via stdin, never embedded in shell arguments. |
 | `mcp-sqlite` | Requires `DROIDMCP_ROOT` + an API key; values bind as `?` parameters; `describe_table` validates the table name against the schema before quoting it; the read tools (`query`, `list_tables`, `describe_table`, `export_csv`) run on a `mode=ro` connection so the engine rejects any write, even one stacked after a `SELECT` or fronted by a CTE. |
+| `mcp-contacts` | Read-only. The `termux-contact-list` backend takes no arguments; every filter (`query`, `name`, `number`) is applied in memory, so no caller-supplied text reaches a command line — there is no argument-injection surface. Dev mode is allowed on loopback, but a key is recommended because the address book is personal data. |
 
 Known gaps that operators should keep in mind (tracked in `AUDIT_REPORT.txt`):
 

@@ -21,9 +21,9 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
 
 ## At a glance
 
-| Zero dependencies | Secure by default | Ten focused servers |
+| Zero dependencies | Secure by default | Eleven focused servers |
 |:---|:---|:---|
-| One static ARM64 binary per server, pure Go — no CGO, no interpreter, nothing else to install. | Loopback-only listener, API-key auth, optional TLS, sandboxed roots, redacted logs, signed releases. | Files, GitHub, web scraping, shell, LAN, clipboard, media, SQLite, device sensors, and notifications — each behind a small, auditable tool surface. |
+| One static ARM64 binary per server, pure Go — no CGO, no interpreter, nothing else to install. | Loopback-only listener, API-key auth, optional TLS, sandboxed roots, redacted logs, signed releases. | Files, GitHub, web scraping, shell, LAN, clipboard, media, SQLite, device sensors, notifications, and contacts — each behind a small, auditable tool surface. |
 
 ```
       Claude Code · Gemini CLI · any MCP client
@@ -40,6 +40,8 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
        │   media    │   sqlite   │  sensors   │
        ├────────────┴────────────┴────────────┤
        │            notifications             │
+       ├──────────────────────────────────────┤
+       │               contacts               │
        └──────────────────────────────────────┘
 ```
 
@@ -57,6 +59,7 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
 | `mcp-sqlite` | `3007` | Local SQLite databases, pure Go — no CGO | `DROIDMCP_ROOT` + key |
 | `mcp-sensors` | `3008` | Device sensors: battery, location, WiFi, brightness, volume | `termux-api` |
 | `mcp-notifications` | `3009` | Android notifications and Do Not Disturb status | `termux-api` |
+| `mcp-contacts` | `3010` | Read-only address book: search, export (JSON/vCard) | `termux-api` |
 
 Expand a server for its tool list; the full per-tool reference, with arguments and
 examples, lives in the [usage guide](docs/usage.md).
@@ -234,6 +237,26 @@ no DND getter) and may be unavailable on some devices.
 
 </details>
 
+<details>
+<summary><b>mcp-contacts</b> — read-only Android address book (requires Termux:API)</summary>
+<br>
+
+Requires the `termux-api` package and the Termux:API Android app, with Contacts
+permission granted. Read-only, so key-less dev mode is allowed on localhost; a
+key is recommended because the address book is personal data. The backend
+command takes no arguments — every filter is applied in memory, so nothing a
+caller types reaches a command line. `list_groups` is a documented stub
+(Termux:API has no groups endpoint).
+
+| Tool | Description |
+|------|-------------|
+| `search_contacts` | Filter by name or number (substring, formatting-insensitive) |
+| `get_contact` | Full records for an exact name and/or number |
+| `list_groups` | Stub: groups are unavailable via Termux:API |
+| `export_contacts` | Export (optionally filtered) as JSON or vCard 3.0 |
+
+</details>
+
 ## Quick start
 
 **From a release** — each release ships one binary per server plus a signed
@@ -337,7 +360,7 @@ The full threat model and production checklist live in
 ```
 cmd/<server>/       one main package per server (filesystem, github, scraper,
                     termux, network, clipboard, media, sqlite, sensors,
-                    notifications)
+                    notifications, contacts)
 internal/           core — shared HTTP/SSE server · config · logger · buildinfo
 docs/               usage guide (EN/ES) · security · Termux setup
 scripts/            reproducible ARM64 cross-build

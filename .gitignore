@@ -11,6 +11,7 @@ bin/
 /sqlite
 /sensors
 /notifications
+/contacts
 *.exe
 *.exe~
 *.dll

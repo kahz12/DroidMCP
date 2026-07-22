@@ -17,7 +17,7 @@ mkdir -p bin
 # Same version derivation as the Makefile; override with VERSION=... if needed.
 VERSION="${VERSION:-$(git describe --tags --always 2>/dev/null || echo dev)}"
 
-SERVICES=("filesystem" "github" "scraper" "termux" "network" "clipboard" "media" "sqlite" "sensors" "notifications")
+SERVICES=("filesystem" "github" "scraper" "termux" "network" "clipboard" "media" "sqlite" "sensors" "notifications" "contacts")
 
 for service in "${SERVICES[@]}"; do
     echo "Building $service for ARM64 (version $VERSION)..."
