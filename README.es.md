@@ -21,9 +21,9 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 
 ## De un vistazo
 
-| Cero dependencias | Seguro por defecto | Nueve servidores enfocados |
+| Cero dependencias | Seguro por defecto | Diez servidores enfocados |
 |:---|:---|:---|
-| Un binario ARM64 estático por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios, SQLite y sensores del dispositivo — cada uno tras una superficie de tools pequeña y auditable. |
+| Un binario ARM64 estático por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios, SQLite, sensores del dispositivo y notificaciones — cada uno tras una superficie de tools pequeña y auditable. |
 
 ```
    Claude Code · Gemini CLI · cualquier cliente MCP
@@ -38,7 +38,9 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
        │   termux   │  network   │ clipboard  │
        ├────────────┼────────────┼────────────┤
        │   media    │   sqlite   │  sensors   │
-       └────────────┴────────────┴────────────┘
+       ├────────────┴────────────┴────────────┤
+       │            notifications             │
+       └──────────────────────────────────────┘
 ```
 
 ## Servidores
@@ -54,6 +56,7 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 | `mcp-media` | `3006` | Navegación de medios y transformaciones con `ffmpeg` | `DROIDMCP_ROOT` + key |
 | `mcp-sqlite` | `3007` | Bases de datos SQLite locales, Go puro — sin CGO | `DROIDMCP_ROOT` + key |
 | `mcp-sensors` | `3008` | Sensores del dispositivo: batería, ubicación, WiFi, brillo, volumen | `termux-api` |
+| `mcp-notifications` | `3009` | Notificaciones de Android y estado de No molestar | `termux-api` |
 
 Despliega un servidor para ver su lista de tools; la referencia completa por
 tool, con argumentos y ejemplos, está en la [guía de uso](docs/usage.es.md).
@@ -213,6 +216,26 @@ getter de brillo) y puede no estar disponible en algunos dispositivos.
 
 </details>
 
+<details>
+<summary><b>mcp-notifications</b> — notificaciones de Android y No molestar (requiere Termux:API)</summary>
+<br>
+
+Requiere el paquete `termux-api` y la app Android Termux:API. `send` y `dismiss`
+tienen efectos visibles pero no tocan archivos; se recomienda ejecutar con key.
+`list_notifications` necesita el permiso de Acceso a Notificaciones concedido a
+Termux:API. `get_dnd_status` lee el proveedor de ajustes de Android (Termux:API
+no tiene getter de No molestar) y puede no estar disponible en algunos
+dispositivos.
+
+| Tool | Descripción |
+|------|-------------|
+| `send_notification` | Publica una notificación con contenido, y opcional título, id, prioridad |
+| `list_notifications` | Lista las notificaciones activas como JSON |
+| `dismiss_notification` | Descarta una notificación por id |
+| `get_dnd_status` | Estado de No molestar leído de `global zen_mode` |
+
+</details>
+
 ## Inicio rápido
 
 **Desde una release** — cada release incluye un binario por servidor más un
@@ -319,7 +342,8 @@ El modelo de amenazas completo y el checklist de producción están en
 
 ```
 cmd/<servidor>/     un paquete main por servidor (filesystem, github, scraper,
-                    termux, network, clipboard, media, sqlite, sensors)
+                    termux, network, clipboard, media, sqlite, sensors,
+                    notifications)
 internal/           core — servidor HTTP/SSE compartido · config · logger · buildinfo
 docs/               guía de uso (EN/ES) · seguridad · puesta a punto de Termux
 scripts/            compilación cruzada ARM64 reproducible

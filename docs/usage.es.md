@@ -26,6 +26,7 @@ de producción, ver [`security.md`](security.md). Versión en inglés:
   - [mcp-media](#mcp-media)
   - [mcp-sqlite](#mcp-sqlite)
   - [mcp-sensors](#mcp-sensors)
+  - [mcp-notifications](#mcp-notifications)
 - [Recetas](#recetas)
 - [Resolución de problemas](#resolución-de-problemas)
 
@@ -137,6 +138,7 @@ el resto de la documentación:
 | media | `3006` | `droidmcp-media` |
 | sqlite | `3007` | `droidmcp-sqlite` |
 | sensors | `3008` | `droidmcp-sensors` |
+| notifications | `3009` | `droidmcp-notifications` |
 
 ---
 
@@ -791,6 +793,50 @@ disponibilidad se devuelve igualmente).
 
 ---
 
+### mcp-notifications
+
+Notificaciones de Android y estado de No molestar a través de Termux:API. Cada
+tool necesita el paquete `termux-api` (`pkg install termux-api`) más la app
+Android Termux:API; una pieza que falte aparece como una pista de instalación.
+`send_notification` y `dismiss_notification` tienen efectos visibles pero no
+tocan archivos ni ejecutan código arbitrario, así que — como `mcp-clipboard` —
+el servidor permite modo dev sin key en localhost (define
+`DROIDMCP_NOTIFICATIONS_KEY` o `DROIDMCP_API_KEY` para exigir auth). Como
+publicar notificaciones es visible para el usuario, conviene ejecutar este
+servidor con key fuera del desarrollo local. Cada tool acepta `timeout_seconds`
+(por defecto 15s, máx. 120s).
+
+**`send_notification`** — publica una notificación vía `termux-notification`.
+Devuelve `{sent, id}`; `termux-notification` no imprime nada al tener éxito, así
+que un id asignado por el sistema no se devuelve — pasa tu propio `id` para
+actualizar o luego descartar la notificación.
+
+| Argumento | Tipo | Requerido | Defecto | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `content` | string | sí | — | Texto del cuerpo de la notificación. |
+| `title` | string | no | — | Título de la notificación. |
+| `id` | string | no | — | Id estable; reúsalo para actualizar, luego pásalo a `dismiss_notification`. |
+| `priority` | string | no | `default` | Uno de `min`, `low`, `default`, `high`, `max`. |
+| `timeout_seconds` | number | no | `15` | Timeout por llamada. Máx. `120`. |
+
+**`list_notifications`** — notificaciones activas vía `termux-notification-list`.
+Devuelve el array JSON de la API (`id`, `tag`, `key`, `group`, `packageName`,
+`title`, `content`, `when`). Requiere que el permiso de **Acceso a
+Notificaciones** esté concedido a Termux:API en los ajustes de Android; sin él la
+lista sale vacía.
+
+**`dismiss_notification`** — elimina una notificación vía
+`termux-notification-remove`. Toma un `id` requerido (uno pasado antes a
+`send_notification`) y devuelve `{dismissed, id}`.
+
+**`get_dnd_status`** — estado de No molestar. Termux:API no tiene getter de No
+molestar, así que esto lee `global zen_mode` del proveedor de ajustes de Android
+y devuelve `{dnd_enabled, mode, zen_mode, source}`, donde `mode` es `off`,
+`priority_only`, `total_silence` o `alarms_only`. En dispositivos que restringen
+el proveedor de ajustes la tool falla con una explicación en lugar de adivinar.
+
+---
+
 ## Recetas
 
 **Leer un log grande por páginas.** `read_file` se niega a bufferizar de una vez
@@ -820,7 +866,11 @@ host.
 **Enviar una notificación desde un agente.** Con `mcp-termux` en marcha y
 Termux:API instalado, `termux_notification` (title/content) o `termux_toast`
 (text) muestran mensajes en el dispositivo; `termux_tts_speak` lee texto en voz
-alta.
+alta. Para un flujo gestionado — actualizar o limpiar una notificación — usa
+`mcp-notifications`: `send_notification` con un `id` estable, llámalo de nuevo con
+el mismo `id` para actualizar, `list_notifications` para inspeccionar lo que se
+muestra y `dismiss_notification` para limpiarla. Consulta `get_dnd_status`
+primero para no interrumpir No molestar.
 
 **Miniaturizar una carpeta de medios.** `list_media` con `recursive: true`
 (opcionalmente `types: ["video"]`) enumera los archivos; alimenta cada `path`
@@ -856,6 +906,8 @@ instantánea a otra tool con `export_csv`.
 | `mcp-sqlite` `query` devuelve `query only runs read statements` | Se envió una sentencia de escritura a `query`. Usa `execute` para `INSERT`/`UPDATE`/`DELETE`/DDL. |
 | `mcp-sensors` `get_brightness` falla con `cannot read screen brightness` | El dispositivo restringe el proveedor de ajustes de Android (Termux:API no puede leer el brillo en absoluto). Las demás tools de sensores no se ven afectadas. |
 | `mcp-sensors` `get_location` agota el timeout | Un fix GPS fresco necesita vista al cielo y puede exceder el timeout. Usa `request: "last"` para el fix cacheado, `provider: "network"` para uno aproximado, o sube `timeout_seconds`. |
+| `mcp-notifications` `list_notifications` devuelve un array vacío | Termux:API no tiene el permiso de **Acceso a Notificaciones**. Concédelo a Termux:API en los ajustes de *Acceso a notificaciones* de Android; publicar y descartar siguen funcionando sin él. |
+| `mcp-notifications` `get_dnd_status` falla con `cannot read Do Not Disturb state` | El dispositivo restringe el proveedor de ajustes de Android (Termux:API no tiene getter de No molestar). Las demás tools de notificaciones no se ven afectadas. |
 | No puedes alcanzar un servidor desde otra máquina | Es por diseño: el listener está enlazado a `127.0.0.1`. Ponle delante un proxy inverso o un reenvío de puertos, y lee [`security.md`](security.md) antes de exponerlo. |
 
 Para cualquier cosa relacionada con seguridad — exposición, keys, TLS, el modelo

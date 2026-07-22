@@ -21,9 +21,9 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
 
 ## At a glance
 
-| Zero dependencies | Secure by default | Nine focused servers |
+| Zero dependencies | Secure by default | Ten focused servers |
 |:---|:---|:---|
-| One static ARM64 binary per server, pure Go — no CGO, no interpreter, nothing else to install. | Loopback-only listener, API-key auth, optional TLS, sandboxed roots, redacted logs, signed releases. | Files, GitHub, web scraping, shell, LAN, clipboard, media, SQLite, and device sensors — each behind a small, auditable tool surface. |
+| One static ARM64 binary per server, pure Go — no CGO, no interpreter, nothing else to install. | Loopback-only listener, API-key auth, optional TLS, sandboxed roots, redacted logs, signed releases. | Files, GitHub, web scraping, shell, LAN, clipboard, media, SQLite, device sensors, and notifications — each behind a small, auditable tool surface. |
 
 ```
       Claude Code · Gemini CLI · any MCP client
@@ -38,7 +38,9 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
        │   termux   │  network   │ clipboard  │
        ├────────────┼────────────┼────────────┤
        │   media    │   sqlite   │  sensors   │
-       └────────────┴────────────┴────────────┘
+       ├────────────┴────────────┴────────────┤
+       │            notifications             │
+       └──────────────────────────────────────┘
 ```
 
 ## Servers
@@ -54,6 +56,7 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
 | `mcp-media` | `3006` | Media browsing and `ffmpeg`-based transforms | `DROIDMCP_ROOT` + key |
 | `mcp-sqlite` | `3007` | Local SQLite databases, pure Go — no CGO | `DROIDMCP_ROOT` + key |
 | `mcp-sensors` | `3008` | Device sensors: battery, location, WiFi, brightness, volume | `termux-api` |
+| `mcp-notifications` | `3009` | Android notifications and Do Not Disturb status | `termux-api` |
 
 Expand a server for its tool list; the full per-tool reference, with arguments and
 examples, lives in the [usage guide](docs/usage.md).
@@ -212,6 +215,25 @@ unavailable on some devices.
 
 </details>
 
+<details>
+<summary><b>mcp-notifications</b> — Android notifications and Do Not Disturb (requires Termux:API)</summary>
+<br>
+
+Requires the `termux-api` package and the Termux:API Android app. `send` and
+`dismiss` have visible side effects but touch no files; running with a key is
+recommended. `list_notifications` needs Notification Access granted to
+Termux:API. `get_dnd_status` reads the Android settings provider (Termux:API has
+no DND getter) and may be unavailable on some devices.
+
+| Tool | Description |
+|------|-------------|
+| `send_notification` | Post a notification with content, optional title, id, priority |
+| `list_notifications` | List active notifications as JSON |
+| `dismiss_notification` | Dismiss a notification by id |
+| `get_dnd_status` | Do Not Disturb state read from `global zen_mode` |
+
+</details>
+
 ## Quick start
 
 **From a release** — each release ships one binary per server plus a signed
@@ -314,7 +336,8 @@ The full threat model and production checklist live in
 
 ```
 cmd/<server>/       one main package per server (filesystem, github, scraper,
-                    termux, network, clipboard, media, sqlite, sensors)
+                    termux, network, clipboard, media, sqlite, sensors,
+                    notifications)
 internal/           core — shared HTTP/SSE server · config · logger · buildinfo
 docs/               usage guide (EN/ES) · security · Termux setup
 scripts/            reproducible ARM64 cross-build

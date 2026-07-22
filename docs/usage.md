@@ -24,6 +24,7 @@ Versión en español: [`usage.es.md`](usage.es.md).
   - [mcp-media](#mcp-media)
   - [mcp-sqlite](#mcp-sqlite)
   - [mcp-sensors](#mcp-sensors)
+  - [mcp-notifications](#mcp-notifications)
 - [Recipes](#recipes)
 - [Troubleshooting](#troubleshooting)
 
@@ -130,6 +131,7 @@ the binaries at device boot. A convention that matches the rest of the docs:
 | media | `3006` | `droidmcp-media` |
 | sqlite | `3007` | `droidmcp-sqlite` |
 | sensors | `3008` | `droidmcp-sensors` |
+| notifications | `3009` | `droidmcp-notifications` |
 
 ---
 
@@ -766,6 +768,48 @@ string explains its absence otherwise; the availability map is still returned).
 
 ---
 
+### mcp-notifications
+
+Android notifications and Do Not Disturb status through Termux:API. Every tool
+needs the `termux-api` package (`pkg install termux-api`) plus the Termux:API
+Android app; a missing piece surfaces as an install hint. `send_notification`
+and `dismiss_notification` have visible side effects but touch no files and run
+no arbitrary code, so — like `mcp-clipboard` — the server allows key-less dev
+mode on localhost (set `DROIDMCP_NOTIFICATIONS_KEY` or `DROIDMCP_API_KEY` to
+require auth). Because posting notifications is user-visible, prefer running this
+server with a key outside local development. Every tool accepts `timeout_seconds`
+(default 15s, max 120s).
+
+**`send_notification`** — post a notification via `termux-notification`. Returns
+`{sent, id}`; `termux-notification` prints nothing on success, so a
+system-assigned id is not echoed — pass your own `id` to update or later dismiss
+the notification.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `content` | string | yes | — | Notification body text. |
+| `title` | string | no | — | Notification title. |
+| `id` | string | no | — | Stable id; reuse to update, then pass to `dismiss_notification`. |
+| `priority` | string | no | `default` | One of `min`, `low`, `default`, `high`, `max`. |
+| `timeout_seconds` | number | no | `15` | Per-call timeout. Max `120`. |
+
+**`list_notifications`** — active notifications via `termux-notification-list`.
+Returns the API's JSON array (`id`, `tag`, `key`, `group`, `packageName`,
+`title`, `content`, `when`). Requires the **Notification Access** permission to
+be granted to Termux:API in Android settings; without it the list is empty.
+
+**`dismiss_notification`** — remove a notification via
+`termux-notification-remove`. Takes a required `id` (one previously passed to
+`send_notification`) and returns `{dismissed, id}`.
+
+**`get_dnd_status`** — Do Not Disturb state. Termux:API has no DND getter, so
+this reads `global zen_mode` from the Android settings provider and returns
+`{dnd_enabled, mode, zen_mode, source}`, where `mode` is `off`,
+`priority_only`, `total_silence`, or `alarms_only`. On devices that restrict the
+settings provider the tool errors with an explanation instead of guessing.
+
+---
+
 ## Recipes
 
 **Read a large log in pages.** `read_file` refuses to buffer a file over
@@ -792,7 +836,11 @@ one host's ports.
 
 **Push a notification from an agent.** With `mcp-termux` running and Termux:API
 installed, `termux_notification` (title/content) or `termux_toast` (text) surface
-messages on the device; `termux_tts_speak` reads text aloud.
+messages on the device; `termux_tts_speak` reads text aloud. For a managed flow —
+updating or clearing a notification — use `mcp-notifications`: `send_notification`
+with a stable `id`, call it again with the same `id` to update, `list_notifications`
+to inspect what is showing, and `dismiss_notification` to clear it. Check
+`get_dnd_status` first to avoid interrupting Do Not Disturb.
 
 **Thumbnail a media folder.** `list_media` with `recursive: true` (optionally
 `types: ["video"]`) enumerates the files; feed each returned `path` into
@@ -827,6 +875,8 @@ with `export_csv`.
 | `mcp-sqlite` `query` returns `query only runs read statements` | A write statement was sent to `query`. Use `execute` for `INSERT`/`UPDATE`/`DELETE`/DDL. |
 | `mcp-sensors` `get_brightness` errors with `cannot read screen brightness` | The device restricts the Android settings provider (Termux:API cannot read brightness at all). The other sensor tools are unaffected. |
 | `mcp-sensors` `get_location` times out | A fresh GPS fix needs sky view and can exceed the timeout. Use `request: "last"` for the cached fix, `provider: "network"` for a coarse one, or raise `timeout_seconds`. |
+| `mcp-notifications` `list_notifications` returns an empty array | Termux:API lacks the **Notification Access** permission. Grant it to Termux:API in Android's *Notification access* settings; posting and dismissing still work without it. |
+| `mcp-notifications` `get_dnd_status` errors with `cannot read Do Not Disturb state` | The device restricts the Android settings provider (Termux:API has no DND getter). The other notification tools are unaffected. |
 | Can't reach a server from another machine | By design: the listener is bound to `127.0.0.1`. Front it with a reverse proxy or port-forward, and read [`security.md`](security.md) before exposing it. |
 
 For anything security-related — exposure, keys, TLS, the full threat model —

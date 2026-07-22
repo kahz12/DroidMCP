@@ -254,7 +254,7 @@ DroidMCP/
 
 ## Future MCP Ideas
 
-### PHASE 8 — mcp-notifications
+### PHASE 8 — mcp-notifications [DONE]
 > **Goal:** Send and read Android notifications from AI agents
 
 #### MCP Tools
@@ -266,11 +266,12 @@ DroidMCP/
 | `get_dnd_status`      | Check Do Not Disturb status                |
 
 #### Tasks
-- [ ] Integrate `termux-notification` for sending notifications with title, content, and ID
-- [ ] Implement `list_notifications` via `termux-notification-list`
-- [ ] Implement `dismiss_notification` via `termux-notification-remove`
-- [ ] Handle `get_dnd_status` via `termux-volume` or stub if unsupported by API
-- [ ] Integration into build pipeline (Makefile/scripts)
+- [x] Integrate `termux-notification` for sending notifications with title, content, id, and priority (returns {sent, id})
+- [x] Implement `list_notifications` via `termux-notification-list` (JSON passthrough; needs Notification Access granted to Termux:API)
+- [x] Implement `dismiss_notification` via `termux-notification-remove` by id
+- [x] Implement `get_dnd_status` by reading `global zen_mode` from the Android settings provider (Termux:API has no DND getter), best-effort with a clear error when restricted
+- [x] Integration into build pipeline (Makefile / `scripts/build-arm64.sh` / release workflow)
+- [x] Documentation: server tables in both READMEs and a full `### mcp-notifications` section in `docs/usage.md` + `docs/usage.es.md`
 
 ---
 
