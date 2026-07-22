@@ -26,6 +26,7 @@ Versión en español: [`usage.es.md`](usage.es.md).
   - [mcp-sensors](#mcp-sensors)
   - [mcp-notifications](#mcp-notifications)
   - [mcp-contacts](#mcp-contacts)
+  - [mcp-sms](#mcp-sms)
 - [Recipes](#recipes)
 - [Troubleshooting](#troubleshooting)
 
@@ -66,8 +67,8 @@ The key is resolved per server: `DROIDMCP_<SERVER>_KEY` is checked first (for
 example `DROIDMCP_TERMUX_KEY`), then the global `DROIDMCP_API_KEY`. With no key
 set, the low-privilege servers run in **dev mode** — they accept every request
 and log `auth=disabled` at startup. `mcp-filesystem`, `mcp-termux`, `mcp-media`,
-`mcp-sqlite`, and `mcp-github` have no dev mode: they refuse to start without a
-key.
+`mcp-sqlite`, `mcp-github`, and `mcp-sms` have no dev mode: they refuse to start
+without a key.
 
 **Host binding.** The listener is bound to `127.0.0.1`, and every request's
 `Host` header must name a loopback destination (`localhost`, `127.0.0.1`, `::1`)
@@ -142,6 +143,7 @@ the binaries at device boot. A convention that matches the rest of the docs:
 | sensors | `3008` | `droidmcp-sensors` |
 | notifications | `3009` | `droidmcp-notifications` |
 | contacts | `3010` | `droidmcp-contacts` |
+| sms | `3011` | `droidmcp-sms` |
 
 ---
 
@@ -155,7 +157,7 @@ launching the binary.
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `DROIDMCP_PORT` | `3000` | TCP port for the SSE listener. Must be `1`–`65535` or the server refuses to start. |
-| `DROIDMCP_API_KEY` | unset | Global key required in `X-DroidMCP-Key`. Unset means dev mode (except filesystem/termux/media/sqlite/github). |
+| `DROIDMCP_API_KEY` | unset | Global key required in `X-DroidMCP-Key`. Unset means dev mode (except filesystem/termux/media/sqlite/github/sms). |
 | `DROIDMCP_<SERVER>_KEY` | unset | Per-server override, e.g. `DROIDMCP_GITHUB_KEY`. Wins over the global key. |
 | `DROIDMCP_ALLOWED_HOSTS` | unset | Extra `Host` header values accepted besides loopback (comma-separated, no port). For reverse-proxy / port-forward front-ends. |
 | `DROIDMCP_TLS_CERT` | unset | PEM certificate path. Both cert and key must be set to enable HTTPS + HSTS. |
@@ -185,6 +187,7 @@ launching the binary.
 | `DROIDMCP_MEDIA_FFMPEG` | media | PATH lookup | Explicit path to the `ffmpeg` binary used by `convert_image`, `thumbnail`, and `extract_audio`. |
 | `DROIDMCP_MEDIA_EXIFTOOL` | media | PATH lookup | Explicit path to `exiftool`; when present, enriches `get_metadata`. |
 | `DROIDMCP_SQLITE_KEY` | sqlite | unset | Required (this or `DROIDMCP_API_KEY`); no dev mode. |
+| `DROIDMCP_SMS_KEY` | sms | unset | Required (this or `DROIDMCP_API_KEY`); no dev mode — it reads OTP/2FA messages and can send real SMS. |
 
 The GitHub token is resolved in order: `GITHUB_TOKEN`, then `GITHUB_APP_TOKEN`,
 then `GITHUB_FINE_GRAINED_TOKEN`. The first one set is used and validated at
@@ -890,6 +893,59 @@ RFC 6350). Contacts without a number omit the `TEL` line.
 
 ---
 
+### mcp-sms
+
+Android SMS through Termux:API (`termux-sms-list`, `termux-sms-send`). Every tool
+needs the `termux-api` package (`pkg install termux-api`) plus the Termux:API
+Android app, with the SMS permissions granted to it; a missing piece surfaces as
+an install hint. This is the **highest-privilege** Termux:API server, so it has
+**no dev mode** — it refuses to start without `DROIDMCP_SMS_KEY` or
+`DROIDMCP_API_KEY`, because reading messages exposes one-time passcodes and 2FA
+codes, and `send_sms` dispatches a real, billable, irreversible message. Every
+tool accepts `timeout_seconds` (default 15s, max 120s).
+
+**`list_sms`** — stored messages via `termux-sms-list`. Returns the API's JSON
+array (fields such as `threadid`, `type`, `read`, `number`, `received`, `body`).
+Treat the output as sensitive — it can contain OTP/2FA codes.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `type` | string | no | `all` | Message box: `all`, `inbox`, `sent`, `draft`, `outbox`, `failed`, `queued`. |
+| `limit` | number | no | `10` | Max messages returned. Clamped to `1`–`500`. |
+| `offset` | number | no | `0` | Messages to skip (paging). |
+| `timeout_seconds` | number | no | `15` | Per-call timeout. Max `120`. |
+
+**`search_sms`** — fetch a page via `termux-sms-list` and filter it in memory.
+`query` matches the message body (case-insensitive substring); `number` matches
+the address with spaces, dashes and parentheses ignored on both sides. At least
+one of `query`/`number` is required; when both are given, both must match.
+Returns `{count, messages:[…]}`. The filters never touch a command line.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `query` | string | one of query/number | — | Text matched in the body (case-insensitive). |
+| `number` | string | one of query/number | — | Address matched (formatting ignored). |
+| `type` | string | no | `all` | Message box to scan (same values as `list_sms`). |
+| `limit` | number | no | `100` | Max messages scanned/returned. Clamped to `1`–`500`. |
+| `timeout_seconds` | number | no | `15` | Per-call timeout. Max `120`. |
+
+**`send_sms`** — send a real SMS via `termux-sms-send`. **This dispatches a
+billable, irreversible message**, so use it deliberately. `number` is one or
+more recipients (comma-separated; each is digits with an optional leading `+` —
+anything else is rejected); `text` is the body, delivered to the command on
+**stdin**, never as an argument, so message content can never be parsed as an
+option or reach a shell. Returns `{sent, recipients, sim_slot}`. Requires the
+`SEND_SMS` permission granted to Termux:API.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `number` | string | yes | — | Recipient(s), comma-separated. Digits with optional leading `+`. |
+| `text` | string | yes | — | Message body (max 4000 characters). |
+| `sim_slot` | number | no | — | 0-based SIM slot to send from. |
+| `timeout_seconds` | number | no | `15` | Per-call timeout. Max `120`. |
+
+---
+
 ## Recipes
 
 **Read a large log in pages.** `read_file` refuses to buffer a file over
@@ -941,7 +997,7 @@ with `export_csv`.
 | Symptom | Cause and fix |
 |---------|---------------|
 | Server exits immediately, logs `requires DROIDMCP_ROOT` | `mcp-filesystem`, `mcp-media`, or `mcp-sqlite` was started without `DROIDMCP_ROOT`. Set it to a real directory. |
-| Server exits, logs `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux`/`mcp-media`/`mcp-sqlite`/`mcp-github` need a key. Set one; they have no dev mode. |
+| Server exits, logs `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux`/`mcp-media`/`mcp-sqlite`/`mcp-github`/`mcp-sms` need a key. Set one; they have no dev mode. |
 | Clients get `403 forbidden host` | The request's `Host` header is not loopback. Connect via `localhost`/`127.0.0.1`/`::1`, or add the front-end hostname to `DROIDMCP_ALLOWED_HOSTS`. |
 | Server exits, logs `DROIDMCP_PORT out of range` or `not a directory` | Config validation failed. Port must be `1`–`65535`; `DROIDMCP_ROOT` must exist and be a directory. |
 | Clients get `401 unauthorized` | A key is configured but the client isn't sending `X-DroidMCP-Key`, or it doesn't match. `/healthz` is exempt, so a working health probe with failing tool calls points at the header. |

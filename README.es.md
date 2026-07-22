@@ -21,9 +21,9 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 
 ## De un vistazo
 
-| Cero dependencias | Seguro por defecto | Once servidores enfocados |
+| Cero dependencias | Seguro por defecto | Doce servidores enfocados |
 |:---|:---|:---|
-| Un binario ARM64 estático por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios, SQLite, sensores del dispositivo, notificaciones y contactos — cada uno tras una superficie de tools pequeña y auditable. |
+| Un binario ARM64 estático por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios, SQLite, sensores del dispositivo, notificaciones, contactos y SMS — cada uno tras una superficie de tools pequeña y auditable. |
 
 ```
    Claude Code · Gemini CLI · cualquier cliente MCP
@@ -40,9 +40,9 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
        │   media    │   sqlite   │  sensors   │
        ├────────────┴────────────┴────────────┤
        │            notifications             │
-       ├──────────────────────────────────────┤
-       │               contacts               │
-       └──────────────────────────────────────┘
+       ├────────────────────┬─────────────────┤
+       │      contacts       │       sms       │
+       └────────────────────┴─────────────────┘
 ```
 
 ## Servidores
@@ -60,6 +60,7 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 | `mcp-sensors` | `3008` | Sensores del dispositivo: batería, ubicación, WiFi, brillo, volumen | `termux-api` |
 | `mcp-notifications` | `3009` | Notificaciones de Android y estado de No molestar | `termux-api` |
 | `mcp-contacts` | `3010` | Agenda de solo lectura: búsqueda, exportación (JSON/vCard) | `termux-api` |
+| `mcp-sms` | `3011` | Leer SMS (OTP/2FA) y enviar mensajes reales | `termux-api` + key |
 
 Despliega un servidor para ver su lista de tools; la referencia completa por
 tool, con argumentos y ejemplos, está en la [guía de uso](docs/usage.es.md).
@@ -259,6 +260,25 @@ es un stub documentado (Termux:API no tiene endpoint de grupos).
 
 </details>
 
+<details>
+<summary><b>mcp-sms</b> — leer y enviar SMS de Android (requiere Termux:API, sin modo dev)</summary>
+<br>
+
+Requiere el paquete `termux-api` y la app Android Termux:API con permisos de SMS.
+El servidor de mayor privilegio de Termux:API: leer mensajes expone códigos
+OTP/2FA y `send_sms` envía un mensaje **real, facturable e irreversible** — así
+que **se niega a arrancar sin key** (`DROIDMCP_SMS_KEY` o `DROIDMCP_API_KEY`).
+`send_sms` valida los destinatarios como números de teléfono y pasa el cuerpo por
+stdin, así que el contenido del mensaje nunca llega a un shell.
+
+| Tool | Descripción |
+|------|-------------|
+| `list_sms` | Lista mensajes almacenados por buzón (inbox/sent/…) con paginación |
+| `search_sms` | Filtro en memoria por texto del cuerpo y/o número de contacto |
+| `send_sms` | Envía un SMS real a uno o más destinatarios |
+
+</details>
+
 ## Inicio rápido
 
 **Desde una release** — cada release incluye un binario por servidor más un
@@ -366,7 +386,7 @@ El modelo de amenazas completo y el checklist de producción están en
 ```
 cmd/<servidor>/     un paquete main por servidor (filesystem, github, scraper,
                     termux, network, clipboard, media, sqlite, sensors,
-                    notifications, contacts)
+                    notifications, contacts, sms)
 internal/           core — servidor HTTP/SSE compartido · config · logger · buildinfo
 docs/               guía de uso (EN/ES) · seguridad · puesta a punto de Termux
 scripts/            compilación cruzada ARM64 reproducible

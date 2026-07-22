@@ -342,7 +342,7 @@ DroidMCP/
 
 ---
 
-### PHASE 12 — mcp-sms
+### PHASE 12 — mcp-sms [DONE]
 > **Goal:** SMS management via Termux:API for AI-powered messaging workflows
 
 #### MCP Tools
@@ -353,11 +353,13 @@ DroidMCP/
 | `search_sms`        | Search messages by content or contact        |
 
 #### Tasks
-- [ ] Integrate `termux-sms-list` with inbox/sent/outbox type filter and count limit
-- [ ] Implement `send_sms` via `termux-sms-send` with number and body validation
-- [ ] Implement `search_sms` with in-memory filtering by content or contact number
-- [ ] Handle Termux:API permission errors with descriptive error messages
-- [ ] Integration into build pipeline (Makefile/scripts)
+- [x] Integrate `termux-sms-list` with box type filter (all/inbox/sent/draft/outbox/failed/queued) and limit/offset paging
+- [x] Implement `send_sms` via `termux-sms-send` with recipient validation (`^\+?[0-9]{3,}$`, comma-separated) and body on stdin (never argv)
+- [x] Implement `search_sms` with in-memory filtering by body content and/or contact number (formatting-insensitive)
+- [x] Handle Termux:API permission errors descriptively (non-zero exit surfaces stderr + exit code as JSON)
+- [x] No dev mode — refuses to start without `DROIDMCP_SMS_KEY`/`DROIDMCP_API_KEY` (reads OTP/2FA, sends real SMS)
+- [x] Integration into build pipeline (Makefile / `scripts/build-arm64.sh` / release workflow)
+- [x] Documentation: server tables in both READMEs and a full `### mcp-sms` section in `docs/usage.md` + `docs/usage.es.md`
 
 ---
 

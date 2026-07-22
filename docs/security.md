@@ -32,7 +32,7 @@ Mitigations the codebase currently implements:
 
 | Layer | Mitigation |
 |-------|------------|
-| Auth | Per-server / global API key checked with `crypto/subtle.ConstantTimeCompare`. `mcp-filesystem`, `mcp-termux`, `mcp-media`, `mcp-sqlite` and `mcp-github` refuse to start without one. |
+| Auth | Per-server / global API key checked with `crypto/subtle.ConstantTimeCompare`. `mcp-filesystem`, `mcp-termux`, `mcp-media`, `mcp-sqlite`, `mcp-github` and `mcp-sms` refuse to start without one. |
 | Transport | Optional TLS via `DROIDMCP_TLS_CERT` / `_KEY`; HSTS sent only when TLS is active. |
 | Host binding | Listener bound to `127.0.0.1`; every request must also present a loopback `Host` header (or one listed in `DROIDMCP_ALLOWED_HOSTS`), so a DNS-rebinding browser cannot drive the dev-mode servers. |
 | Headers | `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` on every response. |
@@ -45,6 +45,7 @@ Mitigations the codebase currently implements:
 | `mcp-clipboard` | All inputs piped via stdin, never embedded in shell arguments. |
 | `mcp-sqlite` | Requires `DROIDMCP_ROOT` + an API key; values bind as `?` parameters; `describe_table` validates the table name against the schema before quoting it; the read tools (`query`, `list_tables`, `describe_table`, `export_csv`) run on a `mode=ro` connection so the engine rejects any write, even one stacked after a `SELECT` or fronted by a CTE. |
 | `mcp-contacts` | Read-only. The `termux-contact-list` backend takes no arguments; every filter (`query`, `name`, `number`) is applied in memory, so no caller-supplied text reaches a command line — there is no argument-injection surface. Dev mode is allowed on loopback, but a key is recommended because the address book is personal data. |
+| `mcp-sms` | Highest-privilege Termux:API server — no dev mode (refuses to start unkeyed), since reading exposes OTP/2FA codes and `send_sms` dispatches a real, billable, irreversible message. `send_sms` recipients are validated against `^\+?[0-9]{3,}$` and passed as a single argv element; the body is delivered on **stdin**, never as an argument, so message content cannot be parsed as an option or reach a shell. `list_sms`/`search_sms` build argv only from a validated `type` enum and integers; search filtering is in-memory. |
 
 Known gaps that operators should keep in mind (tracked in `AUDIT_REPORT.txt`):
 
@@ -67,10 +68,11 @@ Every server enforces the same scheme:
 2. If both are unset, the read-only / low-privilege servers start in
    **dev mode** and log `auth=disabled`. Every request is accepted. Use
    this only on loopback for local development. `mcp-filesystem`,
-   `mcp-termux`, `mcp-media`, `mcp-sqlite` and `mcp-github` are the
-   exceptions: they refuse to start without a key, because they expose
-   command execution, read/write filesystem/database access, or a
-   GitHub token that can read private repos and push commits.
+   `mcp-termux`, `mcp-media`, `mcp-sqlite`, `mcp-github` and `mcp-sms`
+   are the exceptions: they refuse to start without a key, because they
+   expose command execution, read/write filesystem/database access, a
+   GitHub token that can read private repos and push commits, or SMS
+   send plus OTP/2FA message contents.
 3. If a key is set, every inbound request must carry it in the
    `X-DroidMCP-Key` HTTP header. The comparison is constant-time.
 4. Independently of the key, every request's `Host` header must name a
@@ -307,6 +309,7 @@ Before exposing any DroidMCP server beyond `localhost`:
 In dev mode (loopback only, no key, plain HTTP) the scraper, network
 and clipboard servers are fine for experimentation — just understand
 the moment you bind to a non-loopback interface, you owe yourself the
-items above. `mcp-termux` and `mcp-filesystem` have no dev mode: both
-require a key (and filesystem also requires `DROIDMCP_ROOT`) even on
-loopback.
+items above. `mcp-termux`, `mcp-filesystem`, `mcp-media`, `mcp-sqlite`,
+`mcp-github` and `mcp-sms` have no dev mode: they require a key (and
+filesystem/media/sqlite also require `DROIDMCP_ROOT`) even on loopback.
+`mcp-sms` especially: it can send real messages and read OTP/2FA codes.

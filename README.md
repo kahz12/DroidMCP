@@ -21,9 +21,9 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
 
 ## At a glance
 
-| Zero dependencies | Secure by default | Eleven focused servers |
+| Zero dependencies | Secure by default | Twelve focused servers |
 |:---|:---|:---|
-| One static ARM64 binary per server, pure Go — no CGO, no interpreter, nothing else to install. | Loopback-only listener, API-key auth, optional TLS, sandboxed roots, redacted logs, signed releases. | Files, GitHub, web scraping, shell, LAN, clipboard, media, SQLite, device sensors, notifications, and contacts — each behind a small, auditable tool surface. |
+| One static ARM64 binary per server, pure Go — no CGO, no interpreter, nothing else to install. | Loopback-only listener, API-key auth, optional TLS, sandboxed roots, redacted logs, signed releases. | Files, GitHub, web scraping, shell, LAN, clipboard, media, SQLite, device sensors, notifications, contacts, and SMS — each behind a small, auditable tool surface. |
 
 ```
       Claude Code · Gemini CLI · any MCP client
@@ -40,9 +40,9 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
        │   media    │   sqlite   │  sensors   │
        ├────────────┴────────────┴────────────┤
        │            notifications             │
-       ├──────────────────────────────────────┤
-       │               contacts               │
-       └──────────────────────────────────────┘
+       ├────────────────────┬─────────────────┤
+       │      contacts       │       sms       │
+       └────────────────────┴─────────────────┘
 ```
 
 ## Servers
@@ -60,6 +60,7 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
 | `mcp-sensors` | `3008` | Device sensors: battery, location, WiFi, brightness, volume | `termux-api` |
 | `mcp-notifications` | `3009` | Android notifications and Do Not Disturb status | `termux-api` |
 | `mcp-contacts` | `3010` | Read-only address book: search, export (JSON/vCard) | `termux-api` |
+| `mcp-sms` | `3011` | Read SMS (OTP/2FA) and send real messages | `termux-api` + key |
 
 Expand a server for its tool list; the full per-tool reference, with arguments and
 examples, lives in the [usage guide](docs/usage.md).
@@ -257,6 +258,25 @@ caller types reaches a command line. `list_groups` is a documented stub
 
 </details>
 
+<details>
+<summary><b>mcp-sms</b> — read and send Android SMS (requires Termux:API, no dev mode)</summary>
+<br>
+
+Requires the `termux-api` package and the Termux:API Android app with SMS
+permissions. Highest-privilege Termux:API server: reading messages exposes
+OTP/2FA codes and `send_sms` dispatches a **real, billable, irreversible**
+message — so it **refuses to start without a key** (`DROIDMCP_SMS_KEY` or
+`DROIDMCP_API_KEY`). `send_sms` validates recipients as phone numbers and passes
+the body on stdin, so message content never reaches a shell.
+
+| Tool | Description |
+|------|-------------|
+| `list_sms` | List stored messages by box (inbox/sent/…) with paging |
+| `search_sms` | In-memory filter by body text and/or contact number |
+| `send_sms` | Send a real SMS to one or more recipients |
+
+</details>
+
 ## Quick start
 
 **From a release** — each release ships one binary per server plus a signed
@@ -360,7 +380,7 @@ The full threat model and production checklist live in
 ```
 cmd/<server>/       one main package per server (filesystem, github, scraper,
                     termux, network, clipboard, media, sqlite, sensors,
-                    notifications, contacts)
+                    notifications, contacts, sms)
 internal/           core — shared HTTP/SSE server · config · logger · buildinfo
 docs/               usage guide (EN/ES) · security · Termux setup
 scripts/            reproducible ARM64 cross-build

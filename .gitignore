@@ -12,6 +12,7 @@ bin/
 /sensors
 /notifications
 /contacts
+/sms
 *.exe
 *.exe~
 *.dll

@@ -80,7 +80,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     strategy:
       matrix:
-        service: [filesystem, github, scraper, termux, network, clipboard, media, sqlite, sensors, notifications, contacts]
+        service: [filesystem, github, scraper, termux, network, clipboard, media, sqlite, sensors, notifications, contacts, sms]
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -165,6 +165,7 @@ jobs:
             release/droidmcp-sensors
             release/droidmcp-notifications
             release/droidmcp-contacts
+            release/droidmcp-sms
             release/SHA256SUMS
             release/SHA256SUMS.sig
             release/SHA256SUMS.pem
