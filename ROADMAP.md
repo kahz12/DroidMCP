@@ -146,7 +146,7 @@ DroidMCP/
 - [x] Auth via `GITHUB_TOKEN` (Personal Access Token)
 - [x] Integrate `google/go-github`
 - [x] Rate limiting handler
-- [x] Tests with GitHub API mock
+- [x] Tests with GitHub API mock — every tool covered against an `httptest` GitHub, with the outgoing request asserted for each of the nine write operations (a wrong verb, branch or head/base would ship a real mutation to the wrong place)
 - [x] Documentation and examples
 
 ---
@@ -411,8 +411,11 @@ DroidMCP/
 
 ---
 
-### PHASE 15 — mcp-llm-proxy
-> **Goal:** Proxy local LLMs (llama.cpp, Ollama) running on device as MCP tools
+### PHASE 15 — mcp-llm-proxy [DONE]
+> **Goal:** Proxy local LLMs running on device as MCP tools
+> Ollama only: its REST API is what the tasks below target, and every tool maps
+> 1:1 onto one endpoint. A llama.cpp backend would need a second client for no
+> new capability, so it is out of scope.
 
 #### MCP Tools
 | Tool                | Description                                  |
@@ -423,12 +426,14 @@ DroidMCP/
 | `model_info`        | Get model metadata and capabilities          |
 
 #### Tasks
-- [ ] Implement `list_models` by querying Ollama REST API (`GET /api/tags`)
-- [ ] Implement `generate` via Ollama `/api/generate` with streaming disabled for simplicity
-- [ ] Implement `embed` via Ollama `/api/embeddings` returning float slice as JSON
-- [ ] Implement `model_info` via Ollama `/api/show` for metadata and parameter count
-- [ ] Support configurable Ollama host via `DROIDMCP_OLLAMA_HOST` env var (default `localhost:11434`)
-- [ ] Integration into build pipeline (Makefile/scripts)
+- [x] Implement `list_models` by querying Ollama REST API (`GET /api/tags`), summarized to name/size/family/parameter size/quantization
+- [x] Implement `generate` via Ollama `/api/generate` with streaming disabled; sampling options are only forwarded when set, so model defaults survive
+- [x] Implement `embed` via Ollama `/api/embeddings` returning the float slice as JSON, with `include_vector: false` for callers that only need the dimensions
+- [x] Implement `model_info` via Ollama `/api/show`, reading the context window from the architecture-namespaced key; raw modelfile/template/license behind `verbose`
+- [x] Support configurable Ollama host via `DROIDMCP_OLLAMA_HOST` (default `http://127.0.0.1:11434` — the IPv4 literal, since `localhost` is IPv6-only under proot). Accepts `host`, `host:port` or a full URL; the host never comes from a tool argument
+- [x] Off-device guard: a non-local daemon address is refused unless `DROIDMCP_LLMPROXY_ALLOW_REMOTE=1`, so prompts do not leave the network by accident. Enforced at three points — the configured address, the concrete IP at dial time (`net.Dialer.Control`, for hostnames that re-resolve), and a blanket refusal to follow redirects (Go replays the body on a 307)
+- [x] Integration into build pipeline (Makefile / `scripts/build-arm64.sh` / release workflow)
+- [x] Documentation: server tables in both READMEs, a full `### mcp-llm-proxy` section in `docs/usage.md` + `docs/usage.es.md`, and a row in `docs/security.md`
 
 ---
 

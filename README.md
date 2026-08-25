@@ -21,9 +21,9 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
 
 ## At a glance
 
-| Zero dependencies | Secure by default | Twelve focused servers |
+| Zero dependencies | Secure by default | Thirteen focused servers |
 |:---|:---|:---|
-| One static ARM64 binary per server, pure Go — no CGO, no interpreter, nothing else to install. | Loopback-only listener, API-key auth, optional TLS, sandboxed roots, redacted logs, signed releases. | Files, GitHub, web scraping, shell, LAN, clipboard, media, SQLite, device sensors, notifications, contacts, and SMS — each behind a small, auditable tool surface. |
+| One static ARM64 binary per server, pure Go — no CGO, no interpreter, nothing else to install. | Loopback-only listener, API-key auth, optional TLS, sandboxed roots, redacted logs, signed releases. | Files, GitHub, web scraping, shell, LAN, clipboard, media, SQLite, device sensors, notifications, contacts, SMS, and on-device LLMs — each behind a small, auditable tool surface. |
 
 ```
       Claude Code · Gemini CLI · any MCP client
@@ -40,9 +40,9 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
        │   media    │   sqlite   │  sensors   │
        ├────────────┴────────────┴────────────┤
        │            notifications             │
-       ├────────────────────┬─────────────────┤
-       │      contacts       │       sms       │
-       └────────────────────┴─────────────────┘
+       ├────────────┬────────────┬────────────┤
+       │  contacts  │    sms     │ llm-proxy  │
+       └────────────┴────────────┴────────────┘
 ```
 
 ## Servers
@@ -61,6 +61,7 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
 | `mcp-notifications` | `3009` | Android notifications and Do Not Disturb status | `termux-api` |
 | `mcp-contacts` | `3010` | Read-only address book: search, export (JSON/vCard) | `termux-api` |
 | `mcp-sms` | `3011` | Read SMS (OTP/2FA) and send real messages | `termux-api` + key |
+| `mcp-llm-proxy` | `3012` | On-device LLMs through a local Ollama daemon | `ollama` |
 
 Expand a server for its tool list; the full per-tool reference, with arguments and
 examples, lives in the [usage guide](docs/usage.md).
@@ -274,6 +275,30 @@ the body on stdin, so message content never reaches a shell.
 | `list_sms` | List stored messages by box (inbox/sent/…) with paging |
 | `search_sms` | In-memory filter by body text and/or contact number |
 | `send_sms` | Send a real SMS to one or more recipients |
+
+</details>
+
+<details>
+<summary><b>mcp-llm-proxy</b> — local models through Ollama, no cloud round-trip</summary>
+<br>
+
+Requires a running Ollama daemon (`pkg install ollama` or a desktop on the same
+LAN). The address comes from `DROIDMCP_OLLAMA_HOST` and **never** from a tool
+argument, so a calling model cannot redirect prompts; the default is
+`http://127.0.0.1:11434`. A host outside the device or LAN is refused unless
+`DROIDMCP_LLMPROXY_ALLOW_REMOTE=1` is set, which keeps prompts from silently
+leaving the network; the same rule is re-checked on the dialed IP and no
+redirect is ever followed. Responses are returned whole (no streaming), and
+on-device generation is slow enough that the default `generate` timeout is 300s.
+Dev mode is allowed; the per-server key is `DROIDMCP_LLMPROXY_KEY` (no
+separator, like the binary).
+
+| Tool | Description |
+|------|-------------|
+| `list_models` | Installed models with size, family and quantization |
+| `generate` | Single-shot completion with optional system prompt and sampling |
+| `embed` | Embedding vector for a piece of text |
+| `model_info` | Family, parameter size, context window and capabilities |
 
 </details>
 

@@ -1,26 +1,60 @@
 # Binaries
 bin/
-# Stray `go build` output at the repo root (one per cmd/ server)
+release/
+
+# Stray `go build` output at the repo root (one per cmd/ server). Keep in sync
+# with SERVICES in the Makefile and scripts/build-arm64.sh.
+/clipboard
+/contacts
 /filesystem
 /github
-/scraper
-/termux
-/network
-/clipboard
+/llmproxy
 /media
-/sqlite
-/sensors
+/network
 /notifications
-/contacts
+/scraper
+/sensors
 /sms
+/sqlite
+/termux
+# Makefile and CI name their output droidmcp-<service>; the CI matrix builds it
+# in the workspace root before uploading.
+/droidmcp-*
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+__debug_bin*
+
+# Test and coverage output
+*.test
+*.out
+coverage.html
 
 # Dependency directories
 vendor/
+
+# Go workspace files are machine-local
+go.work
+go.work.sum
+
+# Credentials and local config: GITHUB_TOKEN, DROIDMCP_*_KEY and the TLS
+# cert/key from docs/security.md live in the environment, never in the repo.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local runtime data (network inventory, sqlite databases, logs)
+*.log
+*.db
+*.sqlite
+*.sqlite3
+network-devices.json
 
 # IDEs
 .idea/
@@ -30,3 +64,4 @@ vendor/
 
 # OS
 .DS_Store
+Thumbs.db

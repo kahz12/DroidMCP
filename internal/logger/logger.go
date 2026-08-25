@@ -37,13 +37,6 @@ func init() {
 	Log = newLoggerFromEnv(os.Stderr)
 }
 
-// Configure rebuilds the global Log from the current environment. Servers
-// that read DROIDMCP_LOG_* after init (e.g. via config.LoadConfig) can call
-// this once during startup to apply the override.
-func Configure() {
-	Log = newLoggerFromEnv(os.Stderr)
-}
-
 func newLoggerFromEnv(w io.Writer) *slog.Logger {
 	level := parseLevel(os.Getenv(envLogLevel))
 	format := os.Getenv(envLogFormat)
@@ -155,9 +148,6 @@ func containsWord(s, word string) bool {
 func isAlnum(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
-
-// Debug logs a debug-level message. Dropped when level > debug.
-func Debug(msg string, args ...any) { Log.Debug(msg, args...) }
 
 // Info logs an informational message with optional key-value pairs.
 func Info(msg string, args ...any) { Log.Info(msg, args...) }

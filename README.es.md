@@ -21,9 +21,9 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 
 ## De un vistazo
 
-| Cero dependencias | Seguro por defecto | Doce servidores enfocados |
+| Cero dependencias | Seguro por defecto | Trece servidores enfocados |
 |:---|:---|:---|
-| Un binario ARM64 estático por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios, SQLite, sensores del dispositivo, notificaciones, contactos y SMS — cada uno tras una superficie de tools pequeña y auditable. |
+| Un binario ARM64 estático por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios, SQLite, sensores del dispositivo, notificaciones, contactos, SMS y LLMs en el dispositivo — cada uno tras una superficie de tools pequeña y auditable. |
 
 ```
    Claude Code · Gemini CLI · cualquier cliente MCP
@@ -40,9 +40,9 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
        │   media    │   sqlite   │  sensors   │
        ├────────────┴────────────┴────────────┤
        │            notifications             │
-       ├────────────────────┬─────────────────┤
-       │      contacts       │       sms       │
-       └────────────────────┴─────────────────┘
+       ├────────────┬────────────┬────────────┤
+       │  contacts  │    sms     │ llm-proxy  │
+       └────────────┴────────────┴────────────┘
 ```
 
 ## Servidores
@@ -61,6 +61,7 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 | `mcp-notifications` | `3009` | Notificaciones de Android y estado de No molestar | `termux-api` |
 | `mcp-contacts` | `3010` | Agenda de solo lectura: búsqueda, exportación (JSON/vCard) | `termux-api` |
 | `mcp-sms` | `3011` | Leer SMS (OTP/2FA) y enviar mensajes reales | `termux-api` + key |
+| `mcp-llm-proxy` | `3012` | LLMs en el dispositivo a través de un Ollama local | `ollama` |
 
 Despliega un servidor para ver su lista de tools; la referencia completa por
 tool, con argumentos y ejemplos, está en la [guía de uso](docs/usage.es.md).
@@ -276,6 +277,30 @@ stdin, así que el contenido del mensaje nunca llega a un shell.
 | `list_sms` | Lista mensajes almacenados por buzón (inbox/sent/…) con paginación |
 | `search_sms` | Filtro en memoria por texto del cuerpo y/o número de contacto |
 | `send_sms` | Envía un SMS real a uno o más destinatarios |
+
+</details>
+
+<details>
+<summary><b>mcp-llm-proxy</b> — modelos locales vía Ollama, sin salir a la nube</summary>
+<br>
+
+Requiere un demonio Ollama en marcha (`pkg install ollama` o un equipo en la
+misma LAN). La dirección viene de `DROIDMCP_OLLAMA_HOST` y **nunca** de un
+argumento de tool, así que el modelo que llama no puede redirigir los prompts;
+por defecto es `http://127.0.0.1:11434`. Un host fuera del dispositivo o de la
+LAN se rechaza salvo que se ponga `DROIDMCP_LLMPROXY_ALLOW_REMOTE=1`, lo que
+evita que los prompts salgan de la red sin querer; la misma regla se recomprueba
+sobre la IP a la que se conecta y no se sigue ningún redirect. Las respuestas se
+devuelven enteras (sin streaming) y la generación en el dispositivo es lenta, de
+ahí que el timeout por defecto de `generate` sea de 300s. Se permite modo dev; la
+key por servidor es `DROIDMCP_LLMPROXY_KEY` (sin separador, como el binario).
+
+| Tool | Descripción |
+|------|-------------|
+| `list_models` | Modelos instalados con tamaño, familia y cuantización |
+| `generate` | Completado de una sola pasada con system prompt y sampling opcionales |
+| `embed` | Vector de embedding para un texto |
+| `model_info` | Familia, tamaño de parámetros, ventana de contexto y capacidades |
 
 </details>
 

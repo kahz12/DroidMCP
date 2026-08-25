@@ -11,7 +11,7 @@ GOFLAGS_REPRO   := -trimpath
 # Builds from the same commit stamp the same value, preserving reproducibility.
 VERSION         ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS_REPRO   := -s -w -buildid= -X github.com/kahz12/droidmcp/internal/buildinfo.Version=$(VERSION)
-SERVICES        := filesystem github scraper termux network clipboard media sqlite sensors notifications contacts sms
+SERVICES        := filesystem github scraper termux network clipboard media sqlite sensors notifications contacts sms llmproxy
 
 build:
 	@echo "Building binaries (reproducible, version $(VERSION))..."

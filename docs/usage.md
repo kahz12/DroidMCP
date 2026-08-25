@@ -27,6 +27,7 @@ Versión en español: [`usage.es.md`](usage.es.md).
   - [mcp-notifications](#mcp-notifications)
   - [mcp-contacts](#mcp-contacts)
   - [mcp-sms](#mcp-sms)
+  - [mcp-llm-proxy](#mcp-llm-proxy)
 - [Recipes](#recipes)
 - [Troubleshooting](#troubleshooting)
 
@@ -144,6 +145,7 @@ the binaries at device boot. A convention that matches the rest of the docs:
 | notifications | `3009` | `droidmcp-notifications` |
 | contacts | `3010` | `droidmcp-contacts` |
 | sms | `3011` | `droidmcp-sms` |
+| llm-proxy | `3012` | `droidmcp-llmproxy` |
 
 ---
 
@@ -188,6 +190,9 @@ launching the binary.
 | `DROIDMCP_MEDIA_EXIFTOOL` | media | PATH lookup | Explicit path to `exiftool`; when present, enriches `get_metadata`. |
 | `DROIDMCP_SQLITE_KEY` | sqlite | unset | Required (this or `DROIDMCP_API_KEY`); no dev mode. |
 | `DROIDMCP_SMS_KEY` | sms | unset | Required (this or `DROIDMCP_API_KEY`); no dev mode — it reads OTP/2FA messages and can send real SMS. |
+| `DROIDMCP_OLLAMA_HOST` | llm-proxy | `http://127.0.0.1:11434` | Address of the Ollama daemon. Accepts `host`, `host:port` or a full URL. The IPv4 literal is deliberate: under Termux/proot `localhost` often resolves to `::1` only. |
+| `DROIDMCP_LLMPROXY_ALLOW_REMOTE` | llm-proxy | off | Set to `1` to allow a daemon outside the device/LAN. Off by default so prompts do not leave the network; the server refuses to start on a public host without it. |
+| `DROIDMCP_LLMPROXY_KEY` | llm-proxy | unset | Per-server key. Note the name has no separator: the server is `mcp-llm-proxy` but the variable is `LLMPROXY`, matching the `cmd/llmproxy` binary. A misspelling is not an error — the server starts in dev mode with auth disabled. |
 
 The GitHub token is resolved in order: `GITHUB_TOKEN`, then `GITHUB_APP_TOKEN`,
 then `GITHUB_FINE_GRAINED_TOKEN`. The first one set is used and validated at
@@ -946,6 +951,95 @@ option or reach a shell. Returns `{sent, recipients, sim_slot}`. Requires the
 
 ---
 
+### mcp-llm-proxy
+
+Local inference through an Ollama daemon (`pkg install ollama`, then `ollama
+serve`). Nothing is generated in this process: each tool is one guarded call to
+one Ollama endpoint, with the reply trimmed to the fields an agent can act on.
+
+The daemon address comes from `DROIDMCP_OLLAMA_HOST` and **never** from a tool
+argument, so the model being served cannot redirect its own prompts. A bare
+`host`, a `host:port` pair, or a full URL are all accepted; the default is
+`http://127.0.0.1:11434`, pinned to the IPv4 literal because under Termux and
+proot `localhost` frequently resolves to `::1` only, where Ollama is not
+listening. At startup the resolved address must be loopback, RFC1918,
+link-local or CGNAT — a public address is refused unless
+`DROIDMCP_LLMPROXY_ALLOW_REMOTE=1` is set, so prompts never leave the network by
+accident. Two more checks back that up: the same rule is re-applied to the
+concrete IP at dial time (so a hostname that starts resolving elsewhere is
+caught mid-run), and redirects are never followed, because Go replays the
+request body on a 307 and a daemon answering with a `Location` header could
+otherwise bounce every prompt to an unvetted host.
+
+Dev mode is allowed: the server reads no device data and writes nothing, though
+a key is still worth setting on a shared device because generation costs CPU and
+battery. The variable is **`DROIDMCP_LLMPROXY_KEY`** — no separator, matching the
+`droidmcp-llmproxy` binary rather than the `mcp-llm-proxy` server name. Spelling
+it `DROIDMCP_LLM_PROXY_KEY` is not an error: the key is simply not found and the
+server starts unauthenticated.
+
+Streaming is off by design (an MCP call returns a single payload), so `generate`
+answers once the whole completion is ready. On-device generation is slow —
+seconds for a 0.5B model, minutes for larger ones — hence the 300s default
+timeout. Every tool accepts `timeout_seconds`, capped at `900`.
+
+**`list_models`** — the models the daemon can actually run, via `GET /api/tags`.
+Returns `{count, models:[{name, size_bytes, family, parameter_size,
+quantization, modified_at}]}`. Call it first: the `model` argument of the other
+tools must match one of these names exactly (tag included).
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `timeout_seconds` | number | no | `15` | Per-call timeout. Max `900`. |
+
+**`generate`** — a single-shot completion via `POST /api/generate` with
+`stream: false`. Returns `{model, response, done_reason, prompt_eval_count,
+eval_count, total_duration_ms, load_duration_ms, tokens_per_second}`. Sampling
+options are only forwarded when you set them, so omitting `temperature` and
+`num_predict` leaves each model's own defaults intact rather than overriding
+them with zeros. `format` accepts only `json`, which constrains the output to
+valid JSON; any other value is rejected before a request is issued.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `model` | string | yes | — | Model name exactly as reported by `list_models`. |
+| `prompt` | string | yes | — | The prompt to complete. |
+| `system` | string | no | — | System prompt overriding the one baked into the model. |
+| `temperature` | number | no | model default | Sampling temperature. |
+| `num_predict` | number | no | model default | Maximum tokens to generate. |
+| `format` | string | no | — | Only `json` is accepted; constrains output to valid JSON. |
+| `timeout_seconds` | number | no | `300` | Per-call timeout. Max `900`. |
+
+**`embed`** — an embedding vector via `POST /api/embeddings`. Returns `{model,
+dimensions, embedding}`. Use an embedding model (`nomic-embed-text`,
+`qwen3-embedding`, `mxbai-embed-large`); a chat model usually still answers, but
+with vectors that are not meant for similarity search. Set `include_vector:
+false` when you only need the dimensions — a few thousand floats is a heavy
+payload to push through an agent's context.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `model` | string | yes | — | Embedding model as reported by `list_models`. |
+| `prompt` | string | yes | — | Text to embed. |
+| `include_vector` | boolean | no | `true` | Set `false` to return only `{model, dimensions}`. |
+| `timeout_seconds` | number | no | `60` | Per-call timeout. Max `900`. |
+
+**`model_info`** — metadata via `POST /api/show`. Returns `{model, family,
+families, parameter_size, quantization, context_length, capabilities}`. The
+context window is read from the architecture-namespaced key Ollama reports
+(`qwen2.context_length`, `llama.context_length`, …), so it works across model
+families; check it before sending a long prompt. The raw `modelfile`,
+`template`, `parameters` and `license` fields are kilobytes of noise for an
+agent and are omitted unless `verbose` is set.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|:---:|---------|-------------|
+| `model` | string | yes | — | Model name as reported by `list_models`. |
+| `verbose` | boolean | no | `false` | Also return the raw modelfile, template, parameters and license. |
+| `timeout_seconds` | number | no | `15` | Per-call timeout. Max `900`. |
+
+---
+
 ## Recipes
 
 **Read a large log in pages.** `read_file` refuses to buffer a file over
@@ -1014,6 +1108,9 @@ with `export_csv`.
 | `mcp-sensors` `get_location` times out | A fresh GPS fix needs sky view and can exceed the timeout. Use `request: "last"` for the cached fix, `provider: "network"` for a coarse one, or raise `timeout_seconds`. |
 | `mcp-notifications` `list_notifications` returns an empty array | Termux:API lacks the **Notification Access** permission. Grant it to Termux:API in Android's *Notification access* settings; posting and dismissing still work without it. |
 | `mcp-notifications` `get_dnd_status` errors with `cannot read Do Not Disturb state` | The device restricts the Android settings provider (Termux:API has no DND getter). The other notification tools are unaffected. |
+| `mcp-llm-proxy` exits, logs `cannot use the configured Ollama host` | `DROIDMCP_OLLAMA_HOST` is unparseable, uses a scheme other than http/https, or points outside the device/LAN. Fix the value, or set `DROIDMCP_LLMPROXY_ALLOW_REMOTE=1` if a remote daemon is intended. |
+| `mcp-llm-proxy` tools return `cannot reach ollama at …` | The daemon is not running or listens elsewhere. Start it with `ollama serve`, check `curl http://127.0.0.1:11434/api/tags`, and point `DROIDMCP_OLLAMA_HOST` at it if the port differs. Under proot use `127.0.0.1`, not `localhost`. |
+| `mcp-llm-proxy` `generate` returns `did not answer in time` | The model is too large for the timeout. Raise `timeout_seconds` (max `900`), lower `num_predict`, or use a smaller model. |
 | Can't reach a server from another machine | By design: the listener is bound to `127.0.0.1`. Front it with a reverse proxy or port-forward, and read [`security.md`](security.md) before exposing it. |
 
 For anything security-related — exposure, keys, TLS, the full threat model —

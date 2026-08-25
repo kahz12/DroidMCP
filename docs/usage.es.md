@@ -29,6 +29,7 @@ de producción, ver [`security.md`](security.md). Versión en inglés:
   - [mcp-notifications](#mcp-notifications)
   - [mcp-contacts](#mcp-contacts)
   - [mcp-sms](#mcp-sms)
+  - [mcp-llm-proxy](#mcp-llm-proxy)
 - [Recetas](#recetas)
 - [Resolución de problemas](#resolución-de-problemas)
 
@@ -150,6 +151,7 @@ el resto de la documentación:
 | notifications | `3009` | `droidmcp-notifications` |
 | contacts | `3010` | `droidmcp-contacts` |
 | sms | `3011` | `droidmcp-sms` |
+| llm-proxy | `3012` | `droidmcp-llmproxy` |
 
 ---
 
@@ -194,6 +196,9 @@ lanzar el binario.
 | `DROIDMCP_MEDIA_EXIFTOOL` | media | búsqueda en PATH | Ruta explícita a `exiftool`; cuando está presente, enriquece `get_metadata`. |
 | `DROIDMCP_SQLITE_KEY` | sqlite | sin definir | Requerida (esta o `DROIDMCP_API_KEY`); sin modo dev. |
 | `DROIDMCP_SMS_KEY` | sms | sin definir | Requerida (esta o `DROIDMCP_API_KEY`); sin modo dev — lee mensajes OTP/2FA y puede enviar SMS reales. |
+| `DROIDMCP_OLLAMA_HOST` | llm-proxy | `http://127.0.0.1:11434` | Dirección del demonio Ollama. Acepta `host`, `host:puerto` o una URL completa. El literal IPv4 es deliberado: bajo Termux/proot `localhost` suele resolver solo a `::1`. |
+| `DROIDMCP_LLMPROXY_ALLOW_REMOTE` | llm-proxy | off | Ponla a `1` para permitir un demonio fuera del dispositivo/LAN. Desactivada por defecto para que los prompts no salgan de la red; sin ella el servidor no arranca con un host público. |
+| `DROIDMCP_LLMPROXY_KEY` | llm-proxy | sin definir | Key por servidor. Ojo al nombre, que no lleva separador: el servidor es `mcp-llm-proxy` pero la variable es `LLMPROXY`, igual que el binario `cmd/llmproxy`. Escribirla mal no da error — el servidor arranca en modo dev sin autenticación. |
 
 El token de GitHub se resuelve en orden: `GITHUB_TOKEN`, luego
 `GITHUB_APP_TOKEN`, luego `GITHUB_FINE_GRAINED_TOKEN`. Se usa el primero que esté
@@ -980,6 +985,101 @@ Termux:API.
 
 ---
 
+### mcp-llm-proxy
+
+Inferencia local a través de un demonio Ollama (`pkg install ollama` y luego
+`ollama serve`). Aquí no se genera nada: cada tool es una única llamada
+protegida a un endpoint de Ollama, con la respuesta recortada a los campos sobre
+los que un agente puede actuar.
+
+La dirección del demonio viene de `DROIDMCP_OLLAMA_HOST` y **nunca** de un
+argumento de tool, así que el modelo servido no puede redirigir sus propios
+prompts. Se acepta un `host` a secas, un par `host:puerto` o una URL completa;
+por defecto es `http://127.0.0.1:11434`, fijado al literal IPv4 porque bajo
+Termux y proot `localhost` resuelve a menudo solo a `::1`, donde Ollama no
+escucha. Al arrancar, la dirección resuelta debe ser loopback, RFC1918,
+link-local o CGNAT: una dirección pública se rechaza salvo que se ponga
+`DROIDMCP_LLMPROXY_ALLOW_REMOTE=1`, de modo que los prompts nunca salen de la red
+por descuido. Dos comprobaciones más lo respaldan: la misma regla se reaplica a
+la IP concreta en el momento de conectar (así se caza un nombre que empiece a
+resolver a otro sitio con el proceso ya en marcha), y nunca se siguen redirects,
+porque Go reenvía el cuerpo de la petición en un 307 y un demonio que responda
+con una cabecera `Location` podría desviar cada prompt a un host que nadie ha
+validado.
+
+Se permite modo dev: el servidor no lee datos del dispositivo ni escribe nada,
+aunque en un dispositivo compartido conviene poner una key porque generar consume
+CPU y batería. La variable es **`DROIDMCP_LLMPROXY_KEY`** — sin separador, igual
+que el binario `droidmcp-llmproxy` y no que el nombre del servidor
+`mcp-llm-proxy`. Escribirla `DROIDMCP_LLM_PROXY_KEY` no da error: simplemente no
+se encuentra la key y el servidor arranca sin autenticación.
+
+El streaming está desactivado por diseño (una llamada MCP devuelve una sola
+carga útil), así que `generate` responde cuando el completado está entero. La
+generación en el dispositivo es lenta — segundos con un modelo de 0.5B, minutos
+con los grandes — de ahí el timeout por defecto de 300s. Todas las tools aceptan
+`timeout_seconds`, con tope de `900`.
+
+**`list_models`** — los modelos que el demonio puede ejecutar realmente, vía
+`GET /api/tags`. Devuelve `{count, models:[{name, size_bytes, family,
+parameter_size, quantization, modified_at}]}`. Llámala primero: el argumento
+`model` de las demás tools debe coincidir exactamente con uno de estos nombres
+(tag incluido).
+
+| Argumento | Tipo | Requerido | Defecto | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `timeout_seconds` | number | no | `15` | Timeout por llamada. Máx. `900`. |
+
+**`generate`** — un completado de una sola pasada vía `POST /api/generate` con
+`stream: false`. Devuelve `{model, response, done_reason, prompt_eval_count,
+eval_count, total_duration_ms, load_duration_ms, tokens_per_second}`. Las
+opciones de sampling solo se reenvían si las defines, así que omitir
+`temperature` y `num_predict` deja intactos los valores por defecto de cada
+modelo en lugar de pisarlos con ceros. `format` solo acepta `json`, que fuerza
+una salida JSON válida; cualquier otro valor se rechaza antes de emitir la
+petición.
+
+| Argumento | Tipo | Requerido | Defecto | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `model` | string | sí | — | Nombre del modelo tal cual lo reporta `list_models`. |
+| `prompt` | string | sí | — | El prompt a completar. |
+| `system` | string | no | — | System prompt que sustituye al integrado en el modelo. |
+| `temperature` | number | no | el del modelo | Temperatura de sampling. |
+| `num_predict` | number | no | el del modelo | Máximo de tokens a generar. |
+| `format` | string | no | — | Solo se acepta `json`; fuerza salida JSON válida. |
+| `timeout_seconds` | number | no | `300` | Timeout por llamada. Máx. `900`. |
+
+**`embed`** — un vector de embedding vía `POST /api/embeddings`. Devuelve
+`{model, dimensions, embedding}`. Usa un modelo de embeddings
+(`nomic-embed-text`, `qwen3-embedding`, `mxbai-embed-large`); un modelo de chat
+normalmente también responde, pero con vectores que no están pensados para
+búsqueda por similitud. Pon `include_vector: false` cuando solo necesites las
+dimensiones: unos miles de floats son una carga pesada para el contexto de un
+agente.
+
+| Argumento | Tipo | Requerido | Defecto | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `model` | string | sí | — | Modelo de embeddings tal cual lo reporta `list_models`. |
+| `prompt` | string | sí | — | Texto a embeber. |
+| `include_vector` | boolean | no | `true` | Ponlo a `false` para devolver solo `{model, dimensions}`. |
+| `timeout_seconds` | number | no | `60` | Timeout por llamada. Máx. `900`. |
+
+**`model_info`** — metadatos vía `POST /api/show`. Devuelve `{model, family,
+families, parameter_size, quantization, context_length, capabilities}`. La
+ventana de contexto se lee de la clave que Ollama reporta con el prefijo de la
+arquitectura (`qwen2.context_length`, `llama.context_length`, …), así que
+funciona con cualquier familia de modelos; consúltala antes de mandar un prompt
+largo. Los campos crudos `modelfile`, `template`, `parameters` y `license` son
+kilobytes de ruido para un agente y se omiten salvo que actives `verbose`.
+
+| Argumento | Tipo | Requerido | Defecto | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `model` | string | sí | — | Nombre del modelo tal cual lo reporta `list_models`. |
+| `verbose` | boolean | no | `false` | Devuelve además el modelfile, template, parameters y license crudos. |
+| `timeout_seconds` | number | no | `15` | Timeout por llamada. Máx. `900`. |
+
+---
+
 ## Recetas
 
 **Leer un log grande por páginas.** `read_file` se niega a bufferizar de una vez
@@ -1052,6 +1152,9 @@ instantánea a otra tool con `export_csv`.
 | `mcp-sensors` `get_location` agota el timeout | Un fix GPS fresco necesita vista al cielo y puede exceder el timeout. Usa `request: "last"` para el fix cacheado, `provider: "network"` para uno aproximado, o sube `timeout_seconds`. |
 | `mcp-notifications` `list_notifications` devuelve un array vacío | Termux:API no tiene el permiso de **Acceso a Notificaciones**. Concédelo a Termux:API en los ajustes de *Acceso a notificaciones* de Android; publicar y descartar siguen funcionando sin él. |
 | `mcp-notifications` `get_dnd_status` falla con `cannot read Do Not Disturb state` | El dispositivo restringe el proveedor de ajustes de Android (Termux:API no tiene getter de No molestar). Las demás tools de notificaciones no se ven afectadas. |
+| `mcp-llm-proxy` sale al arrancar y loguea `cannot use the configured Ollama host` | `DROIDMCP_OLLAMA_HOST` no se puede parsear, usa un esquema distinto de http/https, o apunta fuera del dispositivo/LAN. Corrige el valor, o pon `DROIDMCP_LLMPROXY_ALLOW_REMOTE=1` si el demonio remoto es intencionado. |
+| Las tools de `mcp-llm-proxy` devuelven `cannot reach ollama at …` | El demonio no está corriendo o escucha en otro sitio. Arráncalo con `ollama serve`, comprueba `curl http://127.0.0.1:11434/api/tags` y apunta `DROIDMCP_OLLAMA_HOST` ahí si el puerto cambia. Bajo proot usa `127.0.0.1`, no `localhost`. |
+| `mcp-llm-proxy` `generate` devuelve `did not answer in time` | El modelo es demasiado grande para el timeout. Sube `timeout_seconds` (máx. `900`), baja `num_predict`, o usa un modelo más pequeño. |
 | No puedes alcanzar un servidor desde otra máquina | Es por diseño: el listener está enlazado a `127.0.0.1`. Ponle delante un proxy inverso o un reenvío de puertos, y lee [`security.md`](security.md) antes de exponerlo. |
 
 Para cualquier cosa relacionada con seguridad — exposición, keys, TLS, el modelo

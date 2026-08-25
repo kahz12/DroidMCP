@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v60/github"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -251,5 +253,130 @@ func TestStringArrayArg(t *testing.T) {
 	}
 	if r := stringArrayArg(callRequest(map[string]any{}), "labels"); r != nil {
 		t.Fatalf("expected nil for missing arg, got %v", r)
+	}
+}
+
+// --- shared helpers for the per-handler test files ---
+
+// handlerFn is the shape every tool handler shares, so argument-validation
+// cases can be driven from a table.
+type handlerFn func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+
+// decodeOK asserts a handler call succeeded and decodes its JSON payload.
+func decodeOK(t *testing.T, res *mcp.CallToolResult, err error, out any) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("handler returned Go error: %v", err)
+	}
+	text, isErr := resultText(t, res)
+	if isErr {
+		t.Fatalf("unexpected error result: %s", text)
+	}
+	if out == nil {
+		return
+	}
+	if err := json.Unmarshal([]byte(text), out); err != nil {
+		t.Fatalf("response is not JSON: %v\n%s", err, text)
+	}
+}
+
+// mustErr asserts a handler call produced an error result and returns its text.
+func mustErr(t *testing.T, res *mcp.CallToolResult, err error) string {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("handler returned Go error: %v", err)
+	}
+	text, isErr := resultText(t, res)
+	if !isErr {
+		t.Fatalf("expected an error result, got: %s", text)
+	}
+	return text
+}
+
+// writeGHError responds the way the GitHub API does on a failure.
+func writeGHError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"message": message})
+}
+
+// requestBody decodes the JSON body a handler sent to the API.
+func requestBody(t *testing.T, r *http.Request) map[string]any {
+	t.Helper()
+	var out map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&out); err != nil {
+		t.Fatalf("request body is not JSON: %v", err)
+	}
+	return out
+}
+
+func TestGitHubErrorSurfacesRateLimitDetail(t *testing.T) {
+	reset := time.Date(2026, 8, 21, 15, 4, 5, 0, time.UTC)
+	err := &github.RateLimitError{
+		Rate:     github.Rate{Limit: 5000, Remaining: 0, Reset: github.Timestamp{Time: reset}},
+		Message:  "API rate limit exceeded",
+		Response: &http.Response{StatusCode: http.StatusForbidden},
+	}
+
+	res, gerr := githubError(err)
+	text := mustErr(t, res, gerr)
+
+	for _, want := range []string{"API rate limit exceeded", "limit=5000", "remaining=0", "2026-08-21T15:04:05Z"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("message %q is missing %q", text, want)
+		}
+	}
+}
+
+func TestGitHubErrorSurfacesSecondaryRateLimit(t *testing.T) {
+	retry := 30 * time.Second
+	err := &github.AbuseRateLimitError{Message: "You have exceeded a secondary rate limit", RetryAfter: &retry}
+
+	res, gerr := githubError(err)
+	text := mustErr(t, res, gerr)
+
+	if !strings.Contains(text, "secondary rate limit") {
+		t.Errorf("message %q should name the secondary rate limit", text)
+	}
+	if !strings.Contains(text, "30s") {
+		t.Errorf("message %q should carry the retry-after hint", text)
+	}
+}
+
+func TestGitHubErrorPassesOtherErrorsThrough(t *testing.T) {
+	res, gerr := githubError(errors.New("dial tcp: no route to host"))
+	text := mustErr(t, res, gerr)
+
+	if !strings.Contains(text, "no route to host") {
+		t.Errorf("message %q should carry the original error", text)
+	}
+}
+
+func TestGitHubErrorOnNilIsNoResult(t *testing.T) {
+	res, err := githubError(nil)
+	if res != nil || err != nil {
+		t.Errorf("githubError(nil) = (%v, %v), want (nil, nil)", res, err)
+	}
+}
+
+func TestNotFound(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"404 from the api", &github.ErrorResponse{Response: &http.Response{StatusCode: 404}}, true},
+		{"500 from the api", &github.ErrorResponse{Response: &http.Response{StatusCode: 500}}, false},
+		{"error response without a response", &github.ErrorResponse{Message: "detached"}, false},
+		{"plain error", errors.New("boom"), false},
+		{"nil", nil, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := notFound(tc.err); got != tc.want {
+				t.Errorf("notFound(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
