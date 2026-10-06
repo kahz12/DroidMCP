@@ -42,7 +42,9 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
        │            notifications             │
        ├────────────┬────────────┬────────────┤
        │  contacts  │    sms     │ llm-proxy  │
-       └────────────┴────────────┴────────────┘
+       ├────────────┴────────────┴────────────┤
+       │              automation              │
+       └──────────────────────────────────────┘
 ```
 
 ## Servidores
@@ -62,6 +64,7 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 | `mcp-contacts` | `3010` | Agenda de solo lectura: búsqueda, exportación (JSON/vCard) | `termux-api` |
 | `mcp-sms` | `3011` | Leer SMS (OTP/2FA) y enviar mensajes reales | `termux-api` + key |
 | `mcp-llm-proxy` | `3012` | LLMs en el dispositivo a través de un Ollama local | `ollama` |
+| `mcp-automation` | `3013` | Scripts de shell programados (cron o intervalo) bajo una allowlist obligatoria | allowlist + key |
 
 Despliega un servidor para ver su lista de tools; la referencia completa por
 tool, con argumentos y ejemplos, está en la [guía de uso](docs/usage.es.md).
@@ -301,6 +304,31 @@ key por servidor es `DROIDMCP_LLMPROXY_KEY` (sin separador, como el binario).
 | `generate` | Completado de una sola pasada con system prompt y sampling opcionales |
 | `embed` | Vector de embedding para un texto |
 | `model_info` | Familia, tamaño de parámetros, ventana de contexto y capacidades |
+
+</details>
+
+<details>
+<summary><b>mcp-automation</b> — scripts programados que ejecuta el propio servidor</summary>
+<br>
+
+Ejecuta scripts de shell según una expresión cron o un intervalo mientras el
+servidor está en marcha (mantenlo con `tmux` o Termux:Boot más
+`termux-wake-lock`). No tiene modo dev ni un "permitir todo" por defecto: se
+niega a arrancar sin key y sin `DROIDMCP_AUTOMATION_ALLOWLIST`. Los scripts se
+ejecutan en un intérprete de shell embebido que comprueba cada comando externo
+contra esa lista al arrancarlo — también dentro de tuberías, `$(…)` y `eval` —,
+resolviendo los nombres con el `PATH` del servidor. Los scripts no pueden
+escribir archivos con `>` ni cambiar `LD_*`/`DYLD_*`, y cada ejecución tiene un
+timeout y la salida limitada. Cron usa `DROIDMCP_AUTOMATION_TZ`, `TZ` o la zona
+horaria del propio Android.
+
+| Tool | Descripción |
+|------|-------------|
+| `create_task` | Programa un script con `cron` o `interval_seconds` |
+| `list_tasks` | Tareas con horario, próxima ejecución y último resultado |
+| `run_task` | Ejecuta una tarea ahora y devuelve su salida |
+| `delete_task` | Borra una tarea y la detiene si está en marcha |
+| `task_history` | Las 20 ejecuciones más recientes de una tarea con su salida |
 
 </details>
 

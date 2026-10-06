@@ -30,6 +30,7 @@ de producción, ver [`security.md`](security.md). Versión en inglés:
   - [mcp-contacts](#mcp-contacts)
   - [mcp-sms](#mcp-sms)
   - [mcp-llm-proxy](#mcp-llm-proxy)
+  - [mcp-automation](#mcp-automation)
 - [Recetas](#recetas)
 - [Resolución de problemas](#resolución-de-problemas)
 
@@ -72,8 +73,8 @@ tiempo constante. La key se resuelve por servidor: primero se comprueba
 `DROIDMCP_<SERVER>_KEY` (por ejemplo `DROIDMCP_TERMUX_KEY`) y luego la global
 `DROIDMCP_API_KEY`. Sin key definida, los servidores de bajo privilegio corren en
 **modo dev** — aceptan todas las peticiones y registran `auth=disabled` al
-arrancar. `mcp-filesystem`, `mcp-termux`, `mcp-media`, `mcp-sqlite`, `mcp-github`
-y `mcp-sms` no tienen modo dev: se niegan a arrancar sin key.
+arrancar. `mcp-filesystem`, `mcp-termux`, `mcp-media`, `mcp-sqlite`, `mcp-github`,
+`mcp-sms` y `mcp-automation` no tienen modo dev: se niegan a arrancar sin key.
 
 **Enlace de Host.** El listener se enlaza a `127.0.0.1`, y la cabecera `Host` de
 cada petición debe nombrar un destino loopback (`localhost`, `127.0.0.1`, `::1`)
@@ -152,6 +153,7 @@ el resto de la documentación:
 | contacts | `3010` | `droidmcp-contacts` |
 | sms | `3011` | `droidmcp-sms` |
 | llm-proxy | `3012` | `droidmcp-llmproxy` |
+| automation | `3013` | `droidmcp-automation` |
 
 ---
 
@@ -165,7 +167,7 @@ lanzar el binario.
 | Variable | Por defecto | Notas |
 |----------|-------------|-------|
 | `DROIDMCP_PORT` | `3000` | Puerto TCP del listener SSE. Debe estar en `1`–`65535` o el servidor no arranca. |
-| `DROIDMCP_API_KEY` | sin definir | Key global requerida en `X-DroidMCP-Key`. Sin definir = modo dev (excepto filesystem/termux/media/sqlite/github/sms). |
+| `DROIDMCP_API_KEY` | sin definir | Key global requerida en `X-DroidMCP-Key`. Sin definir = modo dev (excepto filesystem/termux/media/sqlite/github/sms/automation). |
 | `DROIDMCP_<SERVER>_KEY` | sin definir | Override por servidor, p. ej. `DROIDMCP_GITHUB_KEY`. Prevalece sobre la global. |
 | `DROIDMCP_ALLOWED_HOSTS` | sin definir | Valores de `Host` aceptados además de loopback (separados por comas, sin puerto). Para front-ends con proxy inverso / reenvío de puertos. |
 | `DROIDMCP_TLS_CERT` | sin definir | Ruta al certificado PEM. Cert y key deben estar ambos definidos para habilitar HTTPS + HSTS. |
@@ -199,6 +201,10 @@ lanzar el binario.
 | `DROIDMCP_OLLAMA_HOST` | llm-proxy | `http://127.0.0.1:11434` | Dirección del demonio Ollama. Acepta `host`, `host:puerto` o una URL completa. El literal IPv4 es deliberado: bajo Termux/proot `localhost` suele resolver solo a `::1`. |
 | `DROIDMCP_LLMPROXY_ALLOW_REMOTE` | llm-proxy | off | Ponla a `1` para permitir un demonio fuera del dispositivo/LAN. Desactivada por defecto para que los prompts no salgan de la red; sin ella el servidor no arranca con un host público. |
 | `DROIDMCP_LLMPROXY_KEY` | llm-proxy | sin definir | Key por servidor. Ojo al nombre, que no lleva separador: el servidor es `mcp-llm-proxy` pero la variable es `LLMPROXY`, igual que el binario `cmd/llmproxy`. Escribirla mal no da error — el servidor arranca en modo dev sin autenticación. |
+| `DROIDMCP_AUTOMATION_KEY` | automation | sin definir | Obligatoria (esta o `DROIDMCP_API_KEY`); sin modo dev — las tareas ejecutan comandos sin supervisión. |
+| `DROIDMCP_AUTOMATION_ALLOWLIST` | automation | ninguno (obligatoria) | Nombres de comando o rutas absolutas, separados por comas, que los scripts de las tareas pueden ejecutar. Sin ella el servidor no arranca; no hay un "permitir todo" por defecto. Los builtins (`echo`, `printf`, `test`, …) no necesitan entrada. |
+| `DROIDMCP_AUTOMATION_DB` | automation | `~/.droidmcp/automation-tasks.json` | Ruta del almacén de tareas (tareas y sus últimas ejecuciones). Un archivo corrupto detiene el servidor al arrancar en vez de sobrescribirse. |
+| `DROIDMCP_AUTOMATION_TZ` | automation | `TZ`, después la zona de Android | Zona horaria IANA para las expresiones cron, p. ej. `America/Bogota`. Un nombre desconocido detiene el servidor al arrancar. |
 
 El token de GitHub se resuelve en orden: `GITHUB_TOKEN`, luego
 `GITHUB_APP_TOKEN`, luego `GITHUB_FINE_GRAINED_TOKEN`. Se usa el primero que esté
@@ -1090,6 +1096,135 @@ kilobytes de ruido para un agente y se omiten salvo que actives `verbose`.
 
 ---
 
+### mcp-automation
+
+Scripts de shell programados. `create_task` guarda un script con una expresión
+cron o un intervalo, un planificador dentro del servidor lo ejecuta, y
+`run_task`, `task_history` y `delete_task` lo gestionan. Las tareas solo se
+ejecutan mientras el proceso del servidor está vivo, como cualquier servidor de
+DroidMCP: mantenlo con `tmux` o Termux:Boot, y ejecuta `termux-wake-lock` para que
+Android no suspenda la CPU entre ejecuciones. El planificador vuelve a leer el
+reloj al menos cada 30 segundos, así que una ejecución que vence durante la
+suspensión profunda se dispara en menos de 30 segundos tras despertar el
+dispositivo (una sola vez, aunque haya dormido varios turnos). Las
+ejecuciones perdidas mientras el servidor estaba apagado se saltan, como hace
+cron; las tareas por intervalo conservan su fase entre reinicios.
+
+Una tarea es código que se ejecuta más tarde sin nadie mirando, así que este
+servidor está más cerrado que `mcp-termux`:
+
+- **Sin modo dev.** Se niega a arrancar sin `DROIDMCP_AUTOMATION_KEY` o
+  `DROIDMCP_API_KEY`.
+- **La allowlist es obligatoria.** Se niega a arrancar sin
+  `DROIDMCP_AUTOMATION_ALLOWLIST`, una lista separada por comas de nombres de
+  comando (`termux-battery-status,jq`) o rutas absolutas. Los scripts no se
+  ejecutan en el `sh` del sistema: un intérprete embebido compatible con
+  POSIX/bash ([mvdan.cc/sh](https://github.com/mvdan/sh)) comprueba cada comando
+  externo al arrancarlo — en tuberías, `$(…)`, `<(…)`, trabajos en segundo
+  plano, `eval` y archivos cargados con `source` — y detiene el script en el
+  primero que no esté en la lista. Los nombres se resuelven con el `PATH` del
+  servidor, no con el del script, así que `PATH=/tmp/evil:$PATH` no puede
+  cambiar un nombre permitido por otro binario, y una ruta absoluta debe figurar
+  exactamente en la lista. Los builtins (`echo`, `printf`, `test`/`[`, `read`,
+  `cd`, `export`, …) siempre funcionan.
+- **Sin escritura de archivos desde el shell.** `>`, `>>` y `&>` se rechazan
+  salvo hacia `/dev/null`: una redirección es invisible para la allowlist, y
+  escribir en `~/.bashrc` o en `~/.termux/boot/` ejecutaría comandos arbitrarios
+  más tarde. Leer con `<` funciona. Para conservar la salida, léela con
+  `task_history`, o añade a propósito a la allowlist un comando como `tee`.
+- **Sin cambios en el enlazador.** Ni el script ni `env_extra` pueden definir
+  `LD_*` o `DYLD_*`, que harían que un binario permitido cargara código
+  arbitrario. Los valores heredados, como el `LD_PRELOAD` que Termux define para
+  `termux-exec`, pasan sin cambios.
+- **Ejecuciones acotadas.** Cada ejecución tiene un timeout (por defecto 60s,
+  máx. 1800s) y stdout y stderr limitados a 256 KiB. Cuando se agota el tiempo,
+  se borra la tarea o se apaga el servidor, su grupo de procesos recibe SIGTERM,
+  y un comando que siga vivo 2 segundos después recibe SIGKILL. Los trabajos en
+  segundo plano forman parte de la ejecución y se esperan dentro del mismo
+  timeout.
+
+`create_task` rechaza en el momento lo que una ejecución rechazaría después — un
+error de sintaxis, un comando escrito literalmente que no está en la allowlist,
+una redirección de escritura a una ruta literal, un horario que nunca se cumple,
+un `cwd` que no existe — así que una errata falla al crear la tarea y no a las 3
+de la mañana. Lo que solo se conoce al ejecutar el script (`$cmd`, `eval`,
+`> "$archivo"`) se comprueba entonces, y el rechazo queda en el historial de la
+tarea con código de salida `126`.
+
+Las expresiones cron usan `DROIDMCP_AUTOMATION_TZ` si está definida; si no, `TZ`;
+y si tampoco, la zona del propio Android (`getprop persist.sys.timezone`). Sin
+ese último paso, un binario de Go en Android vería UTC. `list_tasks` informa de
+la zona en uso y cada `next_run` lleva su desfase horario: compruébalo después
+de crear la primera tarea.
+
+Las tareas y las 20 ejecuciones más recientes de cada una, con los últimos 4 KiB
+de salida por flujo, viven en `DROIDMCP_AUTOMATION_DB` (por defecto
+`~/.droidmcp/automation-tasks.json`, modo `0600`), que se reescribe de forma
+atómica en cada cambio. Un archivo corrupto detiene el servidor al arrancar en
+vez de sustituirse por uno vacío: apártalo para empezar de cero. Máximo 50
+tareas.
+
+**`create_task`** — guarda y programa un script. Da exactamente uno de `cron` o
+`interval_seconds`. Cron tiene cinco campos (minuto, hora, día del mes, mes, día
+de la semana) con números, nombres (`jan`, `mon`), `*`, rangos `a-b`, pasos `*/n`
+o `a-b/n` y listas `a,b`; el domingo es `0` o `7`, y cuando los dos campos de día
+están restringidos, un día coincide si cumple cualquiera de los dos, como en el
+cron clásico. Se aceptan las macros `@hourly`, `@daily`, `@weekly`, `@monthly` y
+`@yearly`. Devuelve la tarea con su `id` y `next_run`.
+
+| Argumento | Tipo | Requerido | Defecto | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `script` | string | sí | — | Script de shell, máx. 16 KiB. |
+| `cron` | string | uno de cron/intervalo | — | Expresión cron, p. ej. `*/15 * * * *` o `0 8 * * mon-fri`. |
+| `interval_seconds` | number | uno de cron/intervalo | — | Ejecutar cada N segundos, `60`–`31622400` (366 días). La primera ejecución es un intervalo después de crearla. |
+| `name` | string | no | — | Etiqueta, máx. 64 bytes. |
+| `cwd` | string | no | directorio home | Directorio de trabajo absoluto; debe existir. |
+| `env_extra` | object | no | — | Variables de entorno adicionales (valores string). Se rechazan `LD_*`/`DYLD_*`. |
+| `timeout_seconds` | number | no | `60` | Timeout por ejecución. Máx. `1800`. |
+
+Ejemplo — registrar el nivel de batería cada 15 minutos, con
+`DROIDMCP_AUTOMATION_ALLOWLIST=termux-battery-status,jq`:
+
+```json
+{"name": "bateria", "cron": "*/15 * * * *", "script": "termux-battery-status | jq -r .percentage"}
+```
+
+**`list_tasks`** — todas las tareas con su script, horario, `next_run`, `running`
+(hay una ejecución en curso) y `last_run` (`{trigger, started_at, exit_code,
+ok}`). Devuelve `{time_zone, count, tasks:[…]}`. Sin argumentos.
+
+**`run_task`** — ejecuta una tarea ahora y espera a que termine. Devuelve `{id,
+trigger, started_at, duration_ms, exit_code, timed_out, cancelled, error, stdout,
+stderr, truncated}` con hasta 256 KiB por flujo; `error` explica una ejecución que
+se detuvo (un comando o una redirección rechazados). Una ejecución fallida —
+salida distinta de cero, timeout, rechazo — es un resultado de error que sigue
+incluyendo la ejecución. Falla si la tarea ya está en marcha; cancelar la llamada
+detiene la ejecución. Queda registrada en `task_history` con trigger `manual`.
+
+| Argumento | Tipo | Requerido | Defecto | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `id` | string | sí | — | Id de la tarea, de `create_task` o `list_tasks`. |
+
+**`delete_task`** — borra una tarea y su historial; una ejecución en curso se
+detiene. Devuelve `{deleted, stopped_running}`.
+
+| Argumento | Tipo | Requerido | Defecto | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `id` | string | sí | — | Id de la tarea. |
+
+**`task_history`** — las ejecuciones recientes de la tarea, de la más nueva a la
+más antigua, cada una con `trigger` (`schedule` o `manual`), `started_at`,
+`duration_ms`, `exit_code`, `timed_out`, `error` y los últimos 4 KiB de
+stdout/stderr (`truncated` marca un flujo recortado). Se guardan las 20 más
+recientes por tarea.
+
+| Argumento | Tipo | Requerido | Defecto | Descripción |
+|-----------|------|:---:|---------|-------------|
+| `id` | string | sí | — | Id de la tarea. |
+| `limit` | number | no | `20` | Máximo de ejecuciones devueltas. Máx. `20`. |
+
+---
+
 ## Recetas
 
 **Leer un log grande por páginas.** `read_file` se niega a bufferizar de una vez
@@ -1138,6 +1273,13 @@ array `args` (nunca formatees los valores dentro del SQL). Léelo de vuelta con
 `query`, inspecciona el esquema con `list_tables` / `describe_table`, y entrega una
 instantánea a otra tool con `export_csv`.
 
+**Ejecutar una comprobación diaria.** Arranca `mcp-automation` con una allowlist
+que nombre solo lo que necesita la tarea, llama a `create_task` con
+`cron: "0 8 * * *"` y el script, y luego a `run_task` una vez para verla
+funcionar antes de la primera ejecución programada. `list_tasks` muestra el
+`next_run` (comprueba la zona horaria), y `task_history` guarda las 20
+ejecuciones más recientes con su salida.
+
 ---
 
 ## Resolución de problemas
@@ -1145,7 +1287,7 @@ instantánea a otra tool con `export_csv`.
 | Síntoma | Causa y solución |
 |---------|------------------|
 | El servidor sale de inmediato, registra `requires DROIDMCP_ROOT` | `mcp-filesystem`, `mcp-media` o `mcp-sqlite` se arrancó sin `DROIDMCP_ROOT`. Defínelo a un directorio real. |
-| El servidor sale, registra `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux`/`mcp-media`/`mcp-sqlite`/`mcp-github`/`mcp-sms` necesitan una key. Define una; no tienen modo dev. |
+| El servidor sale, registra `requires DROIDMCP_..._KEY or DROIDMCP_API_KEY` | `mcp-filesystem`/`mcp-termux`/`mcp-media`/`mcp-sqlite`/`mcp-github`/`mcp-sms`/`mcp-automation` necesitan una key. Define una; no tienen modo dev. |
 | Los clientes reciben `403 forbidden host` | La cabecera `Host` de la petición no es loopback. Conéctate vía `localhost`/`127.0.0.1`/`::1`, o añade el hostname del front-end a `DROIDMCP_ALLOWED_HOSTS`. |
 | El servidor sale, registra `DROIDMCP_PORT out of range` o `not a directory` | Falló la validación de configuración. El puerto debe estar en `1`–`65535`; `DROIDMCP_ROOT` debe existir y ser un directorio. |
 | Los clientes reciben `401 unauthorized` | Hay una key configurada pero el cliente no envía `X-DroidMCP-Key`, o no coincide. `/healthz` está exento, así que un health check que funciona con llamadas a tools que fallan apunta a la cabecera. |
@@ -1165,6 +1307,12 @@ instantánea a otra tool con `export_csv`.
 | `mcp-llm-proxy` sale al arrancar y loguea `cannot use the configured Ollama host` | `DROIDMCP_OLLAMA_HOST` no se puede parsear, usa un esquema distinto de http/https, o apunta fuera del dispositivo/LAN. Corrige el valor, o pon `DROIDMCP_LLMPROXY_ALLOW_REMOTE=1` si el demonio remoto es intencionado. |
 | Las tools de `mcp-llm-proxy` devuelven `cannot reach ollama at …` | El demonio no está corriendo o escucha en otro sitio. Arráncalo con `ollama serve`, comprueba `curl http://127.0.0.1:11434/api/tags` y apunta `DROIDMCP_OLLAMA_HOST` ahí si el puerto cambia. Bajo proot usa `127.0.0.1`, no `localhost`. |
 | `mcp-llm-proxy` `generate` devuelve `did not answer in time` | El modelo es demasiado grande para el timeout. Sube `timeout_seconds` (máx. `900`), baja `num_predict`, o usa un modelo más pequeño. |
+| `mcp-automation` sale, registra `requires DROIDMCP_AUTOMATION_ALLOWLIST` | La allowlist es obligatoria. Defínela con los comandos que ejecutan tus tareas, p. ej. `DROIDMCP_AUTOMATION_ALLOWLIST=termux-battery-status,jq`. |
+| `mcp-automation` sale, registra `task store … is corrupt` | `DROIDMCP_AUTOMATION_DB` no es JSON válido. Aparta el archivo para empezar vacío (el servidor no lo sobrescribe), o restáuralo de una copia. |
+| Una tarea falla con `command "…" is not in DROIDMCP_AUTOMATION_ALLOWLIST` | El script ejecuta un comando fuera de la allowlist (quizá dentro de `$(…)` o de una tubería). Añádelo a la allowlist y reinicia el servidor, o cambia el script. Los builtins como `echo` y `printf` no necesitan entrada. |
+| Una tarea falla con `cannot redirect output to …` | Los scripts no pueden escribir archivos con `>`/`>>`. Lee la salida con `task_history`, o añade a la allowlist un comando como `tee` y escribe a través de él. |
+| Una tarea cron se dispara a una hora equivocada | El servidor usa otra zona horaria. `list_tasks` muestra `time_zone`; define `DROIDMCP_AUTOMATION_TZ` (p. ej. `America/Bogota`) y reinicia. |
+| Las tareas no se ejecutan con el teléfono en reposo | Android suspendió Termux. Ejecuta `termux-wake-lock` (o arranca el servidor desde Termux:Boot con un wake lock); las ejecuciones que vencieron con el servidor apagado se saltan, no se recuperan. |
 | No puedes alcanzar un servidor desde otra máquina | Es por diseño: el listener está enlazado a `127.0.0.1`. Ponle delante un proxy inverso o un reenvío de puertos, y lee [`security.md`](security.md) antes de exponerlo. |
 
 Para cualquier cosa relacionada con seguridad — exposición, keys, TLS, el modelo

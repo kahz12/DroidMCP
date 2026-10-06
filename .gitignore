@@ -4,6 +4,7 @@ release/
 
 # Stray `go build` output at the repo root (one per cmd/ server). Keep in sync
 # with SERVICES in the Makefile and scripts/build-arm64.sh.
+/automation
 /clipboard
 /contacts
 /filesystem

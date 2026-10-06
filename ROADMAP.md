@@ -437,8 +437,11 @@ DroidMCP/
 
 ---
 
-### PHASE 16 — mcp-automation
+### PHASE 16 — mcp-automation [DONE]
 > **Goal:** Task automation and cron-like scheduling on Android
+> Scheduled in-process (the server is already long-lived, like every DroidMCP
+> server), with scripts run by an embedded shell interpreter so a mandatory
+> allowlist can check every command they start.
 
 #### MCP Tools
 | Tool                | Description                                  |
@@ -450,12 +453,14 @@ DroidMCP/
 | `task_history`      | View execution history of a task             |
 
 #### Tasks
-- [ ] Design task persistence schema using a local JSON file or SQLite store
-- [ ] Implement `create_task` accepting a cron expression or interval with a shell command payload
-- [ ] Implement `list_tasks` and `task_history` reading from the persistent store
-- [ ] Implement `run_task` for manual trigger with stdout/stderr output capture
-- [ ] Implement `delete_task` with cleanup of any associated scheduler entries
-- [ ] Integration into build pipeline (Makefile/scripts)
+- [x] Design task persistence schema using a local JSON file (`DROIDMCP_AUTOMATION_DB`, default `~/.droidmcp/automation-tasks.json`, `0600`, written atomically); a corrupt file stops the server instead of being overwritten
+- [x] Implement `create_task` accepting a 5-field cron expression (names, ranges, steps, lists, `@daily`-style macros; evaluated in `DROIDMCP_AUTOMATION_TZ`, `TZ` or Android's zone) or an interval (60 s – 366 days), with a shell script payload. Syntax errors, non-allowlisted commands, write redirections and schedules that never fire are rejected at creation
+- [x] Run scripts in an embedded interpreter (`mvdan.cc/sh`) under a mandatory `DROIDMCP_AUTOMATION_ALLOWLIST`, checked on every command as it starts (pipes, `$(…)`, `eval`, background jobs); names resolve through the server's `PATH`; `LD_*`/`DYLD_*` changes and file-writing redirections refused; no dev mode
+- [x] Implement `list_tasks` and `task_history` reading from the persistent store (newest 20 runs per task, last 4 KiB of output per stream)
+- [x] Implement `run_task` for manual trigger with stdout/stderr output capture (256 KiB per stream, timeout up to 30 min)
+- [x] Implement `delete_task` with cleanup of any associated scheduler entries, stopping a run in progress (SIGTERM to its process group); runs also stop on server shutdown
+- [x] Integration into build pipeline (Makefile / `scripts/build-arm64.sh` / release workflow)
+- [x] Documentation: server tables in both READMEs, a full `### mcp-automation` section in `docs/usage.md` + `docs/usage.es.md`, and a threat-model section in `docs/security.md`
 
 ---
 

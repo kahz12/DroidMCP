@@ -42,7 +42,9 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
        │            notifications             │
        ├────────────┬────────────┬────────────┤
        │  contacts  │    sms     │ llm-proxy  │
-       └────────────┴────────────┴────────────┘
+       ├────────────┴────────────┴────────────┤
+       │              automation              │
+       └──────────────────────────────────────┘
 ```
 
 ## Servers
@@ -62,6 +64,7 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
 | `mcp-contacts` | `3010` | Read-only address book: search, export (JSON/vCard) | `termux-api` |
 | `mcp-sms` | `3011` | Read SMS (OTP/2FA) and send real messages | `termux-api` + key |
 | `mcp-llm-proxy` | `3012` | On-device LLMs through a local Ollama daemon | `ollama` |
+| `mcp-automation` | `3013` | Scheduled shell scripts (cron or interval) under a mandatory allowlist | allowlist + key |
 
 Expand a server for its tool list; the full per-tool reference, with arguments and
 examples, lives in the [usage guide](docs/usage.md).
@@ -299,6 +302,30 @@ separator, like the binary).
 | `generate` | Single-shot completion with optional system prompt and sampling |
 | `embed` | Embedding vector for a piece of text |
 | `model_info` | Family, parameter size, context window and capabilities |
+
+</details>
+
+<details>
+<summary><b>mcp-automation</b> — scheduled scripts, run by the server itself</summary>
+<br>
+
+Runs shell scripts on a cron expression or an interval while the server is up
+(keep it alive with `tmux` or Termux:Boot plus `termux-wake-lock`). There is no
+dev mode and no allow-all default: it refuses to start without a key and without
+`DROIDMCP_AUTOMATION_ALLOWLIST`. Scripts run in an embedded shell interpreter
+that checks every external command against that list as it starts — inside
+pipes, `$(…)` and `eval` too — resolving names through the server's `PATH`.
+Scripts cannot write files with `>` nor change `LD_*`/`DYLD_*`, and each run has
+a timeout and capped output. Cron uses `DROIDMCP_AUTOMATION_TZ`, `TZ`, or
+Android's own time zone.
+
+| Tool | Description |
+|------|-------------|
+| `create_task` | Schedule a script with `cron` or `interval_seconds` |
+| `list_tasks` | Tasks with schedule, next run, and last result |
+| `run_task` | Run a task now and return its output |
+| `delete_task` | Remove a task, stopping it if it is running |
+| `task_history` | The newest 20 runs of a task with their output |
 
 </details>
 

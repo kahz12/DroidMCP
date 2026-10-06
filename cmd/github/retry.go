@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -115,10 +116,17 @@ func parseRetryAfter(value string) time.Duration {
 	if value == "" {
 		return 0
 	}
-	if secs, err := strconv.Atoi(value); err == nil && secs > 0 {
+	// Parse as int64, not int: Atoi follows the platform's int, which is 32 bits
+	// on some Android ABIs, and would turn a large delta into "no hint".
+	secs, err := strconv.ParseInt(value, 10, 64)
+	if errors.Is(err, strconv.ErrRange) && secs > 0 {
+		// A delta beyond int64 seconds is still a request to wait: cap it.
+		return retryMaxDelay
+	}
+	if err == nil && secs > 0 {
 		// Clamp before multiplying: a huge value would wrap time.Duration to a
 		// tiny or negative delay instead of the retryMaxDelay cap.
-		if secs > int(retryMaxDelay/time.Second) {
+		if secs > int64(retryMaxDelay/time.Second) {
 			return retryMaxDelay
 		}
 		return time.Duration(secs) * time.Second

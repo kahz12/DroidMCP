@@ -211,14 +211,21 @@ func transport_setNoSleep(t *testing.T) {
 }
 
 // A huge Retry-After must hit the cap, not wrap time.Duration into a tiny or
-// negative delay.
+// negative delay. The values past 2^31 also fail Atoi on a 32-bit int, and the
+// last one does not even fit int64.
 func TestParseRetryAfterClampsHugeValues(t *testing.T) {
-	for _, v := range []string{"86400", "18446744074", "9223372036"} {
+	for _, v := range []string{"86400", "18446744074", "9223372036", "99999999999999999999"} {
 		if d := parseRetryAfter(v); d != retryMaxDelay {
 			t.Errorf("parseRetryAfter(%q) = %v, want %v", v, d, retryMaxDelay)
 		}
 	}
 	if d := parseRetryAfter("30"); d != 30*time.Second {
 		t.Errorf("parseRetryAfter(30) = %v", d)
+	}
+	// Non-positive deltas, however large, are not a hint.
+	for _, v := range []string{"0", "-5", "-99999999999999999999"} {
+		if d := parseRetryAfter(v); d != 0 {
+			t.Errorf("parseRetryAfter(%q) = %v, want 0", v, d)
+		}
 	}
 }

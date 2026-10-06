@@ -32,7 +32,7 @@ Mitigations the codebase currently implements:
 
 | Layer | Mitigation |
 |-------|------------|
-| Auth | Per-server / global API key checked with `crypto/subtle.ConstantTimeCompare`. `mcp-filesystem`, `mcp-termux`, `mcp-media`, `mcp-sqlite`, `mcp-github` and `mcp-sms` refuse to start without one. |
+| Auth | Per-server / global API key checked with `crypto/subtle.ConstantTimeCompare`. `mcp-filesystem`, `mcp-termux`, `mcp-media`, `mcp-sqlite`, `mcp-github`, `mcp-sms` and `mcp-automation` refuse to start without one. |
 | Transport | Optional TLS via `DROIDMCP_TLS_CERT` / `_KEY`; HSTS sent only when TLS is active. |
 | Host binding | Listener bound to `127.0.0.1`; every request must also present a loopback `Host` header (or one listed in `DROIDMCP_ALLOWED_HOSTS`), so a DNS-rebinding browser cannot drive the dev-mode servers. |
 | Headers | `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` on every response. |
@@ -47,6 +47,7 @@ Mitigations the codebase currently implements:
 | `mcp-contacts` | Read-only. The `termux-contact-list` backend takes no arguments; every filter (`query`, `name`, `number`) is applied in memory, so no caller-supplied text reaches a command line — there is no argument-injection surface. Dev mode is allowed on loopback, but a key is recommended because the address book is personal data. |
 | `mcp-sms` | Highest-privilege Termux:API server — no dev mode (refuses to start unkeyed), since reading exposes OTP/2FA codes and `send_sms` dispatches a real, billable, irreversible message. `send_sms` recipients are validated against `^\+?[0-9]{3,}$` and passed as a single argv element; the body is delivered on **stdin**, never as an argument, so message content cannot be parsed as an option or reach a shell. `list_sms`/`search_sms` build argv only from a validated `type` enum and integers; search filtering is in-memory. |
 | `mcp-llm-proxy` | The inverse of the scraper's problem: the destination is fixed by the operator (`DROIDMCP_OLLAMA_HOST`) and is never taken from a tool argument, so a calling model cannot redirect its own prompts. The resolved address must be loopback / RFC1918 / link-local / CGNAT or the server refuses to start; sending prompts to a public host takes an explicit `DROIDMCP_LLMPROXY_ALLOW_REMOTE=1`. That policy is enforced three times, since a single startup check is not enough: on the configured address, again on the concrete post-resolution IP at dial time (`net.Dialer.Control`, closing the re-resolution window for a hostname), and by refusing every redirect (Go replays the request body on a 307, so a `Location` header would otherwise forward the prompt verbatim to an unvetted host). The transport also ignores `HTTP_PROXY` so no proxy can divert traffic past those checks, responses are capped at 32 MiB, and no subprocess is ever spawned. Dev mode is allowed: it reads no device data and writes nothing. |
+| `mcp-automation` | Unattended, scheduled command execution, so no dev mode and no allow-all default: it refuses to start without a key and without `DROIDMCP_AUTOMATION_ALLOWLIST`. Scripts run in an embedded shell interpreter (mvdan.cc/sh), not the system `sh`, and every external command — in pipes, `$(…)`, `<(…)`, background jobs, `eval`, sourced files — is checked against the allowlist when it starts; a refusal stops the run. Allowlisted names resolve through the server's `PATH`, not the script's; absolute paths must be listed exactly. Scripts cannot set `LD_*`/`DYLD_*` (inherited values pass unchanged) nor write files through redirections (only `/dev/null`). Runs have a timeout, capped output, and SIGTERM to their process group (then SIGKILL to the command) on timeout, task deletion or shutdown. See [below](#mcp-automation-scheduled-scripts). |
 
 Known gaps that operators should keep in mind:
 
@@ -69,11 +70,12 @@ Every server enforces the same scheme:
 2. If both are unset, the read-only / low-privilege servers start in
    **dev mode** and log `auth=disabled`. Every request is accepted. Use
    this only on loopback for local development. `mcp-filesystem`,
-   `mcp-termux`, `mcp-media`, `mcp-sqlite`, `mcp-github` and `mcp-sms`
-   are the exceptions: they refuse to start without a key, because they
-   expose command execution, read/write filesystem/database access, a
-   GitHub token that can read private repos and push commits, or SMS
-   send plus OTP/2FA message contents.
+   `mcp-termux`, `mcp-media`, `mcp-sqlite`, `mcp-github`, `mcp-sms` and
+   `mcp-automation` are the exceptions: they refuse to start without a
+   key, because they expose command execution (immediate or scheduled),
+   read/write filesystem/database access, a GitHub token that can read
+   private repos and push commits, or SMS send plus OTP/2FA message
+   contents.
 3. If a key is set, every inbound request must carry it in the
    `X-DroidMCP-Key` HTTP header. The comparison is constant-time.
 4. Independently of the key, every request's `Host` header must name a
@@ -258,6 +260,72 @@ radius, not as a strict sandbox.
 
 If you do not need shell access, do not start `droidmcp-termux`.
 
+## `mcp-automation`: scheduled scripts
+
+A task is a script that runs later with nobody watching, which makes a
+loose policy worse than in `mcp-termux`: a mistake repeats on every
+run, and a task can be planted to fire long after the session that
+created it. The server is therefore stricter by construction.
+
+- **The allowlist is mandatory.** The server refuses to start without
+  `DROIDMCP_AUTOMATION_ALLOWLIST`, and an empty or blank value counts as
+  missing. Entries are command names or absolute paths; a relative path
+  such as `bin/tool` is a startup error.
+
+  ```bash
+  export DROIDMCP_AUTOMATION_KEY="$(openssl rand -base64 32)"
+  export DROIDMCP_AUTOMATION_ALLOWLIST="termux-battery-status,termux-notification,jq"
+  ```
+
+- **The allowlist sees every command.** Scripts are not passed to
+  `sh -c`, where the allowlist would only ever see `sh`. An embedded
+  interpreter ([mvdan.cc/sh](https://github.com/mvdan/sh)) parses and
+  runs the script and hands each external command to the server as it
+  is about to start, wherever it appears: a pipeline, `$(…)`, `<(…)`, a
+  background job, `eval`, `command`, `exec`, a sourced file. A command
+  outside the list stops the run and is recorded in the task history.
+  `create_task` also rejects scripts that name such a command literally,
+  so most mistakes surface at creation time.
+- **Names resolve through the server's `PATH`.** A script may set its
+  own `PATH`, but an allowlisted name is always looked up with the
+  server's, so `PATH=/tmp/evil:$PATH; jq` still runs the real `jq`. A
+  command given by path runs only if that exact absolute path is listed.
+- **No linker overrides.** If a command would start with an `LD_*` or
+  `DYLD_*` variable that differs from the server's own environment, the
+  run is refused; unsetting one is allowed. Termux's own `LD_PRELOAD`
+  for `termux-exec` is inherited unchanged.
+- **No file writes through the shell.** Redirections that open a file
+  for writing (`>`, `>>`, `&>`, `>|`, `<>`) are refused except into
+  `/dev/null`. A redirection is not a command, so the allowlist cannot
+  see it, and `echo … >> ~/.bashrc` or a file in `~/.termux/boot/` would
+  run arbitrary code later. Writing requires an allowlisted command.
+- **Bounded runs.** Per-run timeout (max 30 minutes), 256 KiB of
+  captured output per stream, at most 50 tasks, and the newest 20 runs
+  kept per task. On timeout, task deletion or server shutdown the run's
+  process group gets SIGTERM, and a command still running 2 seconds later
+  gets SIGKILL. A grandchild that ignores SIGTERM and leaves the group can
+  survive; the same is true of `mcp-termux`.
+- **The store is a persistence point.** Tasks live in
+  `DROIDMCP_AUTOMATION_DB` (mode `0600`, directory `0700`). Anyone who
+  can write that file can add tasks, though the allowlist still applies
+  when they run. A corrupt file stops the server instead of being
+  silently replaced. `env_extra` values are stored there in plain text
+  and returned by `list_tasks`, so do not put secrets in them.
+
+What this does not protect against:
+
+- **Allowlisted programs that run other code.** `sh`, `bash`, `python`,
+  `find -exec`, `xargs`, `git` hooks, `awk 'BEGIN{system(…)}'`: listing
+  one of them grants everything it can start, and those processes are
+  outside the interpreter. Keep the list to the programs your tasks need.
+- **Resource exhaustion inside the interpreter.** Builtins run in the
+  server process. A script that grows a variable without bound can
+  exhaust the server's memory before its timeout fires; the server is a
+  single process, so that stops every task.
+- **Shell compatibility.** The interpreter follows POSIX and bash
+  syntax, not every quirk of Termux's `dash`. Test a task with
+  `run_task` before relying on its schedule.
+
 ## Scraper and network defaults
 
 `mcp-scraper` rejects RFC1918 / link-local / loopback URLs by default
@@ -310,6 +378,7 @@ In dev mode (loopback only, no key, plain HTTP) the scraper, network
 and clipboard servers are fine for experimentation — just understand
 the moment you bind to a non-loopback interface, you owe yourself the
 items above. `mcp-termux`, `mcp-filesystem`, `mcp-media`, `mcp-sqlite`,
-`mcp-github` and `mcp-sms` have no dev mode: they require a key (and
-filesystem/media/sqlite also require `DROIDMCP_ROOT`) even on loopback.
+`mcp-github`, `mcp-sms` and `mcp-automation` have no dev mode: they require a
+key (filesystem/media/sqlite also require `DROIDMCP_ROOT`, and automation its
+allowlist) even on loopback.
 `mcp-sms` especially: it can send real messages and read OTP/2FA codes.
