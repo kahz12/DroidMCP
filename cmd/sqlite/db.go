@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kahz12/droidmcp/internal/core"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -119,15 +120,7 @@ func dbForQuery(rel string, readOnly bool) (*sql.DB, *mcp.CallToolResult) {
 // callContext derives a context bounded by the request's timeout_seconds
 // parameter (clamped to (0, maxTimeout]).
 func callContext(parent context.Context, req mcp.CallToolRequest) (context.Context, context.CancelFunc) {
-	secs := req.GetInt("timeout_seconds", int(defaultTimeout.Seconds()))
-	d := time.Duration(secs) * time.Second
-	if d <= 0 {
-		d = defaultTimeout
-	}
-	if d > maxTimeout {
-		d = maxTimeout
-	}
-	return context.WithTimeout(parent, d)
+	return context.WithTimeout(parent, core.TimeoutArg(req, defaultTimeout, maxTimeout))
 }
 
 // toolArgs reads the optional "args" array and normalizes each element for
@@ -150,15 +143,23 @@ func toolArgs(req mcp.CallToolRequest) ([]any, error) {
 }
 
 func normalizeArg(v any) any {
-	if f, ok := v.(float64); ok && !math.IsInf(f, 0) && !math.IsNaN(f) && f == math.Trunc(f) {
-		return int64(f)
+	if f, ok := v.(float64); ok && f == math.Trunc(f) {
+		switch {
+		case f >= -0x1p63 && f < 0x1p63:
+			return int64(f)
+		case f == 0x1p63:
+			// 9223372036854775807 cannot be represented as a float64 and decodes
+			// from JSON to exactly 2^63. Keep binding it as the INTEGER the caller
+			// meant (MaxInt64) instead of a REAL that never equals it.
+			return int64(math.MaxInt64)
+		}
 	}
 	return v
 }
 
 // readKeywords is the set of statement kinds the `query` tool accepts. This
 // leading-keyword check is a fast, friendly rejection ("use execute for
-// writes") — it is no longer the security boundary: query runs on a mode=ro
+// writes") — it is not the security boundary: query runs on a mode=ro
 // connection (see getDB), so the SQLite engine rejects any write regardless of
 // how the statement is shaped.
 var readKeywords = map[string]bool{
@@ -206,15 +207,15 @@ func scanRows(rows *sql.Rows, maxRows int) (cols []string, out []map[string]any,
 		return nil, nil, false, err
 	}
 	out = make([]map[string]any, 0, 16)
+	vals := make([]any, len(cols))
+	ptrs := make([]any, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
 	for rows.Next() {
 		if maxRows > 0 && len(out) >= maxRows {
 			truncated = true
 			break
-		}
-		vals := make([]any, len(cols))
-		ptrs := make([]any, len(cols))
-		for i := range vals {
-			ptrs[i] = &vals[i]
 		}
 		if err = rows.Scan(ptrs...); err != nil {
 			return nil, nil, false, err
@@ -286,6 +287,9 @@ func handleQuery(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolRes
 	if kw := leadingKeyword(sqlText); !readKeywords[kw] {
 		return mcp.NewToolResultError(fmt.Sprintf("query only runs read statements (SELECT/WITH/PRAGMA/EXPLAIN/VALUES); got %q — use execute for writes", kw)), nil
 	}
+	if err := rejectFileAccessSQL(sqlText); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	args, err := toolArgs(req)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -332,6 +336,9 @@ func handleExecute(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 	}
 	sqlText, err := req.RequireString("sql")
 	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if err := rejectFileAccessSQL(sqlText); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	args, err := toolArgs(req)

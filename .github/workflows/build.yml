@@ -135,8 +135,8 @@ jobs:
             cp "$d"/* release/
           done
           cd release
-          sha256sum droidmcp-* > SHA256SUMS
           rm -f *.sha256
+          sha256sum droidmcp-* > SHA256SUMS
           ls -la
 
       - name: Install cosign

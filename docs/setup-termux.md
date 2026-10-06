@@ -70,7 +70,7 @@ minimum you should set:
 | Variable | Why |
 |----------|-----|
 | `DROIDMCP_PORT` | Each server you run needs its own port. |
-| `DROIDMCP_ROOT` | The default `/` is **insecure** — override to a real directory. |
+| `DROIDMCP_ROOT` | The default `/` is **insecure** — override to a real directory. `filesystem`, `media` and `sqlite` refuse to start with `/`. |
 | `DROIDMCP_API_KEY` (or per-server) | Required as soon as the listener is reachable from anything but `localhost`. |
 | `GITHUB_TOKEN` | Required to run `mcp-github`. |
 

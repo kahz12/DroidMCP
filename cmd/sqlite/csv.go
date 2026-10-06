@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/kahz12/droidmcp/internal/pathsec"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -22,6 +23,9 @@ func handleExportCSV(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 	}
 	if kw := leadingKeyword(sqlText); !readKeywords[kw] {
 		return mcp.NewToolResultError(fmt.Sprintf("export_csv only runs read statements (SELECT/WITH/PRAGMA/EXPLAIN/VALUES); got %q", kw)), nil
+	}
+	if err := rejectFileAccessSQL(sqlText); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 	destRel, err := req.RequireString("destination")
 	if err != nil {
@@ -42,11 +46,30 @@ func handleExportCSV(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	if destAbs == dbAbs {
-		return mcp.NewToolResultError("destination must differ from the database file"), nil
-	}
-	if info, statErr := os.Stat(destAbs); statErr == nil && info.IsDir() {
-		return mcp.NewToolResultError(fmt.Sprintf("destination %q is a directory", destRel)), nil
+	// New exports are private (CreateTemp's 0600); an existing destination keeps
+	// the permissions it already had.
+	destMode := os.FileMode(0o600)
+	if info, statErr := os.Stat(destAbs); statErr == nil {
+		if info.IsDir() {
+			return mcp.NewToolResultError(fmt.Sprintf("destination %q is a directory", destRel)), nil
+		}
+		if source, err := os.Stat(dbAbs); err == nil && os.SameFile(source, info) {
+			return mcp.NewToolResultError("destination must differ from the database file"), nil
+		}
+		// Publishing by rename only needs write access to the directory, so a
+		// read-only destination must be refused explicitly, as an in-place write
+		// would have.
+		w, err := os.OpenFile(destAbs, os.O_WRONLY, 0)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		_ = w.Close()
+		destMode = info.Mode().Perm()
+		// Rename replaces a symlink instead of writing through it; publish to the
+		// link's target so the link keeps working (securePath already confined it).
+		if real, err := pathsec.Resolve(destAbs); err == nil {
+			destAbs = real
+		}
 	}
 
 	// Read-only pool: export runs a SELECT, and mode=ro guarantees a stacked or
@@ -73,32 +96,42 @@ func handleExportCSV(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 	if err := os.MkdirAll(filepath.Dir(destAbs), 0o755); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	// Track whether the destination already existed so a failure only removes a
-	// file this call created — never pre-existing user data.
-	preExisting := false
-	if _, statErr := os.Stat(destAbs); statErr == nil {
-		preExisting = true
-	}
-	f, err := os.Create(destAbs)
+	// Publish only a complete export. A query/write failure must preserve any
+	// previous destination, and a hard link must not truncate another file.
+	f, err := os.CreateTemp(filepath.Dir(destAbs), ".droidmcp-export-*.csv")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	published := false
+	defer func() {
+		if !published {
+			_ = os.Remove(f.Name())
+		}
+	}()
 
 	written, writeErr := streamCSV(f, rows, cols)
-	closeErr := f.Close()
-
-	if writeErr == nil {
-		writeErr = closeErr
-	}
 	if writeErr == nil {
 		writeErr = rows.Err()
 	}
+	if writeErr == nil {
+		writeErr = f.Chmod(destMode)
+	}
+	// Flush to disk before the rename makes the export visible: otherwise a
+	// crash could leave an empty destination with the previous export already
+	// gone.
+	if writeErr == nil {
+		writeErr = f.Sync()
+	}
+	if closeErr := f.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
 	if writeErr != nil {
-		if !preExisting {
-			_ = os.Remove(destAbs)
-		}
 		return mcp.NewToolResultError(writeErr.Error()), nil
 	}
+	if err := os.Rename(f.Name(), destAbs); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	published = true
 
 	return jsonResult(map[string]any{
 		"path":    destRel,

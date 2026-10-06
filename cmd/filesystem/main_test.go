@@ -373,6 +373,22 @@ func TestSearchFilesGlobAndRegex(t *testing.T) {
 	})
 }
 
+// search_files walks the whole tree, so it must stop once the request is
+// cancelled instead of finishing the walk.
+func TestSearchFilesStopsWhenCancelled(t *testing.T) {
+	root := withRoot(t)
+	writeTree(t, map[string]string{filepath.Join(root, "a.txt"): "x"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res, err := handleSearchFiles(ctx, callRequest(map[string]any{"pattern": "*.txt"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, failed := resultText(t, res); !failed || !strings.Contains(got, "context canceled") {
+		t.Fatalf("cancelled search = %q (error=%v), want a cancellation error", got, failed)
+	}
+}
+
 func TestDeleteFileRecursive(t *testing.T) {
 	root := withRoot(t)
 	dir := filepath.Join(root, "tree")
@@ -444,6 +460,88 @@ func TestCopyDir(t *testing.T) {
 			t.Errorf("expected %s to exist: %v", p, err)
 		}
 	}
+}
+
+func TestMoveFile(t *testing.T) {
+	root := withRoot(t)
+	writeTree(t, map[string]string{
+		filepath.Join(root, "a.txt"):        "payload",
+		filepath.Join(root, "dir", "b.txt"): "B",
+		filepath.Join(root, "keep.txt"):     "keep",
+		filepath.Join(root, "old.txt"):      "old",
+	})
+	move := func(src, dst string) (string, bool) {
+		return resultText(t, mustCall(handleMoveFile, map[string]any{"source": src, "destination": dst}))
+	}
+	content := func(rel string) string {
+		data, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			return "<" + err.Error() + ">"
+		}
+		return string(data)
+	}
+
+	t.Run("renames a file", func(t *testing.T) {
+		if msg, failed := move("a.txt", "renamed.txt"); failed {
+			t.Fatalf("move failed: %s", msg)
+		}
+		if got := content("renamed.txt"); got != "payload" {
+			t.Fatalf("renamed.txt = %q", got)
+		}
+		if _, err := os.Stat(filepath.Join(root, "a.txt")); !os.IsNotExist(err) {
+			t.Fatalf("source still exists: %v", err)
+		}
+	})
+
+	t.Run("moves a directory", func(t *testing.T) {
+		if msg, failed := move("dir", "dir2"); failed {
+			t.Fatalf("move failed: %s", msg)
+		}
+		if got := content("dir2/b.txt"); got != "B" {
+			t.Fatalf("dir2/b.txt = %q", got)
+		}
+	})
+
+	// os.Rename semantics, as documented for the tool: an existing file at the
+	// destination is replaced.
+	t.Run("replaces an existing destination file", func(t *testing.T) {
+		if msg, failed := move("old.txt", "renamed.txt"); failed {
+			t.Fatalf("move failed: %s", msg)
+		}
+		if got := content("renamed.txt"); got != "old" {
+			t.Fatalf("renamed.txt = %q, want the moved content", got)
+		}
+	})
+
+	t.Run("rejects a directory moved into itself", func(t *testing.T) {
+		if _, failed := move("dir2", "dir2/inner"); !failed {
+			t.Fatal("moved a directory into its own subtree")
+		}
+		if got := content("dir2/b.txt"); got != "B" {
+			t.Fatalf("dir2/b.txt = %q after a rejected move", got)
+		}
+	})
+
+	t.Run("rejects paths outside root", func(t *testing.T) {
+		outside := t.TempDir()
+		symlinkOrSkip(t, filepath.Join(outside, "stolen.txt"), filepath.Join(root, "evil"))
+		for _, args := range [][2]string{
+			{"keep.txt", "../stolen.txt"},
+			{"keep.txt", "/tmp/stolen.txt"},
+			{"../keep.txt", "x"},
+			{"keep.txt", "evil"},
+		} {
+			if _, failed := move(args[0], args[1]); !failed {
+				t.Errorf("move %q -> %q succeeded, want an escape error", args[0], args[1])
+			}
+		}
+		if got := content("keep.txt"); got != "keep" {
+			t.Fatalf("keep.txt = %q after rejected moves", got)
+		}
+		if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+			t.Fatalf("files appeared outside root: %v", entries)
+		}
+	})
 }
 
 // mustCall invokes a handler with the given args and returns its result.

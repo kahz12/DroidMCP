@@ -347,8 +347,11 @@ destino deben estar en el mismo sistema de archivos.
 | `destination` | string | sí | Ruta destino relativa a la raíz. |
 
 **`copy_file`** — copia un archivo, o copia recursivamente un árbol de
-directorios. Los modos de archivo se preservan; los symlinks encontrados durante
-una copia de directorio se omiten.
+directorios. Los modos de archivo se preservan (una copia hecha a través de un
+symlink conserva el modo del destino del enlace); los symlinks encontrados durante
+una copia de directorio se omiten. Un directorio no se puede copiar dentro de sí
+mismo ni sobre uno de sus ancestros, tampoco mediante un alias por symlink, y el
+origen debe ser un archivo regular o un directorio (un FIFO se rechaza).
 
 | Argumento | Tipo | Requerido | Descripción |
 |-----------|------|:---:|-------------|
@@ -713,7 +716,10 @@ sobre una conexión abierta en solo lectura (`mode=ro`), así que el motor de
 SQLite rechaza cualquier escritura — incluida una apilada tras un `SELECT`
 (`SELECT 1; DELETE …`) o antepuesta con un CTE (`WITH … DELETE …`); el chequeo de
 palabra clave inicial (`SELECT`, `WITH`, `PRAGMA`, `EXPLAIN`, `VALUES`) es solo un
-error temprano más amable que te apunta a `execute`. Devuelve
+error temprano más amable que te apunta a `execute`. `query`, `execute` y
+`export_csv` rechazan `ATTACH DATABASE` y `VACUUM … INTO`, que toman una ruta de
+archivo del propio SQL y esquivarían el confinamiento a la raíz (`VACUUM` simple
+sí se permite). Devuelve
 `{columns, rows, count, truncated}`, donde `rows` es un array JSON de objetos por
 columna y `truncated` es `true` cuando existían más filas de las que permitía
 `max_rows`. Los valores TEXT/BLOB se devuelven como cadenas.
@@ -759,8 +765,12 @@ un vector de inyección. Devuelve `{table, columns}` donde cada columna es
 archivo CSV bajo la raíz (una fila de cabecera más una fila por registro). Como
 `query`, corre sobre una conexión de solo lectura (`mode=ro`), así que no puede
 colarse una escritura por el argumento `sql`. Devuelve `{path, rows, columns}`.
-Los directorios padre del destino se crean; un fallo a mitad de escritura elimina
-solo un archivo creado por esta llamada, nunca datos preexistentes, y el destino
+Los directorios padre del destino se crean. El CSV se escribe en un temporal del
+mismo directorio, se sincroniza y se publica con un rename solo si la exportación
+termina, así que un fallo a mitad nunca toca datos preexistentes. Los archivos
+nuevos son privados (`0600`); un destino existente conserva sus permisos, uno de
+solo lectura se rechaza y un destino que sea symlink se escribe a través del
+enlace en lugar de reemplazarlo. El directorio debe ser escribible y el destino
 debe diferir de la base de datos origen.
 
 | Argumento | Tipo | Requerido | Default | Descripción |

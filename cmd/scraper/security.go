@@ -24,9 +24,9 @@ var (
 )
 
 // allowPrivateNetworks reports whether the operator has opted in to scraping
-// loopback / RFC1918 / link-local / CGNAT addresses. Off by default. Set
-// DROIDMCP_SCRAPER_ALLOW_PRIVATE=1 only when you know the deployment is
-// isolated and you actually need to reach an internal URL.
+// loopback / RFC1918 / link-local / CGNAT addresses. Off by default. The
+// DROIDMCP_SCRAPER_ALLOW_PRIVATE=1 override is meant for isolated deployments
+// that genuinely need to reach an internal URL.
 func allowPrivateNetworks() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("DROIDMCP_SCRAPER_ALLOW_PRIVATE")))
 	return v == "1" || v == "true" || v == "yes"
@@ -94,6 +94,10 @@ func isPublicIP(ip net.IP) bool {
 	return true
 }
 
+// maxResponseHeaderBytes bounds the response header block the scraper accepts.
+// Real servers stay far below this, even with several Set-Cookie headers.
+const maxResponseHeaderBytes = 64 << 10
+
 // newSafeTransport returns an http.Transport whose dialer re-runs the SSRF
 // check at the moment we actually open the socket. This catches DNS rebinding
 // (resolve to public, dial to private) and, combined with safeCheckRedirect,
@@ -118,6 +122,9 @@ func newSafeTransport() *http.Transport {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		ResponseHeaderTimeout: 15 * time.Second,
+		// net/http accepts a 10 MiB header block by default; a hostile server
+		// could park that in every cached response.
+		MaxResponseHeaderBytes: maxResponseHeaderBytes,
 	}
 }
 

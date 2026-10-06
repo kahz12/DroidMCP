@@ -21,6 +21,7 @@ import (
 	"github.com/kahz12/droidmcp/internal/config"
 	"github.com/kahz12/droidmcp/internal/core"
 	"github.com/kahz12/droidmcp/internal/logger"
+	"github.com/kahz12/droidmcp/internal/pathsec"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -57,7 +58,7 @@ func main() {
 		logger.Fatal("Failed to load config", err)
 	}
 
-	// Require an explicit DROIDMCP_ROOT. The shared config defaults ROOT to
+	// An explicit DROIDMCP_ROOT is mandatory. The shared config defaults ROOT to
 	// "/", which would expose the entire device; the filesystem server is the
 	// only one that acts on ROOT, so it fail-fasts here rather than silently
 	// granting whole-filesystem access. An empty value is treated as unset.
@@ -65,10 +66,15 @@ func main() {
 		logger.Log.Error("mcp-filesystem requires DROIDMCP_ROOT to be set to the directory it may access. Refusing to start (the default of \"/\" would expose the whole device).")
 		os.Exit(1)
 	}
+	// An explicit "/" is just as broad as the default, so refuse it too.
+	if err := pathsec.ValidateRoot(cfg.Root); err != nil {
+		logger.Log.Error("mcp-filesystem: " + err.Error())
+		os.Exit(1)
+	}
 
 	// This server grants read/write/delete over ROOT, so it must not run
 	// unauthenticated: anything else on localhost (other apps, adb) could
-	// otherwise drive it. Require an API key, mirroring mcp-termux.
+	// otherwise drive it. The API key is mandatory, as in mcp-termux.
 	apiKey := config.ResolveAPIKey("filesystem")
 	if apiKey == "" {
 		logger.Log.Error("mcp-filesystem requires DROIDMCP_FILESYSTEM_KEY or DROIDMCP_API_KEY to be set. Refusing to start.")
@@ -164,81 +170,18 @@ func registerTools(s *core.DroidServer) {
 
 	// copy_file: Recursive copy for files and directories.
 	copyFileTool := mcp.NewTool("copy_file",
-		mcp.WithDescription("Copy a file, or recursively copy a directory tree (symlinks are skipped)"),
+		mcp.WithDescription("Copy a file, or recursively copy a directory tree (symlinks inside the tree are skipped)"),
 		mcp.WithString("source", mcp.Required(), mcp.Description("Source path relative to root")),
 		mcp.WithString("destination", mcp.Required(), mcp.Description("Destination path relative to root")),
 	)
 	s.MCPServer.AddTool(copyFileTool, handleCopyFile)
 }
 
-// securePath resolves a relative path against DROIDMCP_ROOT and ensures it stays within bounds.
-// It returns an absolute path or an error if a traversal attempt is detected.
+// securePath resolves a relative path against DROIDMCP_ROOT and ensures it stays
+// within bounds. It returns an absolute path or an error if a traversal attempt
+// is detected; the containment rules live in internal/pathsec.
 func securePath(relPath string) (string, error) {
-	if filepath.IsAbs(relPath) {
-		return "", fmt.Errorf("absolute paths are not allowed: %s", relPath)
-	}
-	absRoot, err := filepath.Abs(cfg.Root)
-	if err != nil {
-		return "", err
-	}
-	target := filepath.Join(absRoot, relPath)
-	absTarget, err := filepath.Abs(target)
-	if err != nil {
-		return "", err
-	}
-
-	// First line of defense: a cheap lexical check that the cleaned target is
-	// absRoot or a descendant. Using absRoot+separator prevents prefix false
-	// positives (e.g., /tmp/safe vs /tmp/safevil).
-	if !withinRoot(absRoot, absTarget) {
-		return "", fmt.Errorf("access denied: path escapes root")
-	}
-
-	// Second line of defense: resolve symlinks along the path and confirm the
-	// real location is still inside the real root. A lexical check alone can be
-	// defeated by a symlink that lives inside root but points outside it
-	// (closes audit item 2.2).
-	if err := checkNoSymlinkEscape(absRoot, absTarget); err != nil {
-		return "", err
-	}
-	return absTarget, nil
-}
-
-// withinRoot reports whether absTarget is root itself or a descendant of it.
-func withinRoot(root, absTarget string) bool {
-	return absTarget == root || strings.HasPrefix(absTarget, root+string(filepath.Separator))
-}
-
-// checkNoSymlinkEscape resolves symlinks in absTarget (and in every parent
-// component) and verifies the real path stays within the real root. absTarget
-// need not exist yet: the longest existing ancestor is resolved and checked,
-// and the not-yet-created remainder cannot itself contain a symlink. Any
-// resolution error other than "does not exist" fails closed.
-func checkNoSymlinkEscape(absRoot, absTarget string) error {
-	realRoot, err := filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		return fmt.Errorf("cannot resolve root: %w", err)
-	}
-	cur := absTarget
-	for {
-		resolved, err := filepath.EvalSymlinks(cur)
-		if err == nil {
-			if !withinRoot(realRoot, resolved) {
-				return fmt.Errorf("access denied: path escapes root via symlink")
-			}
-			return nil
-		}
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("access denied: %w", err)
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			// Walked past the filesystem root without an existing ancestor.
-			// realRoot exists, so this is unreachable in practice; fail closed.
-			return fmt.Errorf("access denied: path escapes root")
-		}
-		cur = parent
-	}
+	return pathsec.Secure(cfg.Root, relPath)
 }
 
 // buildFileEntry converts an os.FileInfo into the JSON-friendly fileEntry shape.
@@ -507,6 +450,9 @@ func handleSearchFiles(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 
 	var matches []string
 	err = filepath.WalkDir(searchRoot, func(path string, d fs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err != nil {
 			return nil // Skip items with permission errors
 		}
@@ -615,26 +561,43 @@ func handleCopyFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 	} else {
-		if err := copyRegularFile(fullSrc, fullDst, info.Mode().Perm()); err != nil {
+		if err := copyRegularFile(fullSrc, fullDst); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 	}
 	return mcp.NewToolResultText(fmt.Sprintf("Successfully copied %s to %s", src, dst)), nil
 }
 
-// copyRegularFile copies a single file from src to dst, preserving the supplied
-// file mode. Parent directories are created with 0755.
-func copyRegularFile(src, dst string, perm os.FileMode) error {
+// copyRegularFile copies a single regular file from src to dst, keeping the
+// source's permission bits. Parent directories are created with 0755.
+func copyRegularFile(src, dst string) error {
+	// Check the type before opening: open(2) on a FIFO blocks until a writer
+	// appears, which would hang the handler before the check below could run.
+	if info, err := os.Stat(src); err != nil {
+		return err
+	} else if !info.Mode().IsRegular() {
+		return fmt.Errorf("source is not a regular file: %s", src)
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
+	source, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	if !source.Mode().IsRegular() {
+		return fmt.Errorf("source is not a regular file: %s", src)
+	}
+	if target, err := os.Stat(dst); err == nil && os.SameFile(source, target) {
+		return fmt.Errorf("source and destination are the same file")
+	}
 
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return err
 	}
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, source.Mode().Perm())
 	if err != nil {
 		return err
 	}
@@ -646,32 +609,58 @@ func copyRegularFile(src, dst string, perm os.FileMode) error {
 }
 
 // copyDir performs a recursive copy of src into dst, preserving directory and
-// file modes. Symlinks are skipped on purpose: until securePath learns how to
-// resolve them safely (audit item 2.2), following them risks escaping root.
+// file modes. Symlinks inside src are skipped on purpose: following them risks
+// copying content from outside root. Symlinks already present in dst are
+// refused for the same reason (they would redirect a write out of root).
 func copyDir(src, dst string) error {
+	// Compare real locations, not spellings: an in-root symlink can alias any
+	// directory, so a lexical comparison misses a destination that is really
+	// inside the source (the copy would recurse into what it just wrote) or an
+	// ancestor of it (files would be overwritten before they are read).
+	realSrc, err := pathsec.Resolve(src)
+	if err != nil {
+		return err
+	}
+	realDst, err := pathsec.Resolve(dst)
+	if err != nil {
+		return err
+	}
+	if pathsec.Within(realSrc, realDst) {
+		return fmt.Errorf("destination must be outside the source directory")
+	}
+	if pathsec.Within(realDst, realSrc) {
+		return fmt.Errorf("destination must not contain the source directory")
+	}
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			// Deliberately skip; see comment above.
+			return nil
 		}
 		rel, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
 		}
 		target := filepath.Join(dst, rel)
+		// The destination root was validated by securePath (an in-root link to a
+		// directory is fine). Anything below it is checked here, because a
+		// pre-existing destination tree can hold links securePath never saw.
+		if rel != "." {
+			if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("destination contains a symlink: %s", target)
+			}
+		}
 
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		switch {
-		case d.IsDir():
+		if d.IsDir() {
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
 			return os.MkdirAll(target, info.Mode().Perm())
-		case d.Type()&os.ModeSymlink != 0:
-			// Deliberately skip; see comment above.
-			return nil
-		default:
-			return copyRegularFile(path, target, info.Mode().Perm())
 		}
+		return copyRegularFile(path, target)
 	})
 }
 

@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kahz12/droidmcp/internal/core"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -116,15 +117,7 @@ func runCmd(ctx context.Context, name string, args []string, stdin string, timeo
 // reqTimeout reads the optional timeout_seconds argument, clamped to
 // (0, maxExecTimeout].
 func reqTimeout(req mcp.CallToolRequest, def time.Duration) time.Duration {
-	secs := req.GetInt("timeout_seconds", 0)
-	if secs <= 0 {
-		return def
-	}
-	d := time.Duration(secs) * time.Second
-	if d > maxExecTimeout {
-		return maxExecTimeout
-	}
-	return d
+	return core.TimeoutArg(req, def, maxExecTimeout)
 }
 
 // cappedBuffer drops bytes past max and records the overflow, so a runaway

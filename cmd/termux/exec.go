@@ -164,7 +164,7 @@ func runCommand(ctx context.Context, opts execOptions) (*execResult, error) {
 
 // allowlistCheck returns nil if the command is permitted under
 // DROIDMCP_TERMUX_ALLOWLIST. An empty/unset env var means "allow all"
-// (preserves the prior behaviour). Comparison is on the command's basename
+// (the unrestricted default). Comparison is on the command's basename
 // so callers can pass either "ls" or "/usr/bin/ls".
 func allowlistCheck(command string) error {
 	raw := strings.TrimSpace(os.Getenv(allowlistEnv))
@@ -257,7 +257,7 @@ func (c *cappedBuffer) Bytes() []byte {
 
 // safeUTF8 returns b verbatim when it is already valid UTF-8 (the common
 // case). Otherwise it replaces invalid bytes with U+FFFD so the result is
-// safe to pass through mcp.NewToolResultText / JSON encoding (audit 2.6).
+// safe to pass through mcp.NewToolResultText / JSON encoding.
 func safeUTF8(b []byte) string {
 	if utf8.Valid(b) {
 		return string(b)

@@ -28,6 +28,7 @@ import (
 	"github.com/kahz12/droidmcp/internal/config"
 	"github.com/kahz12/droidmcp/internal/core"
 	"github.com/kahz12/droidmcp/internal/logger"
+	"github.com/kahz12/droidmcp/internal/pathsec"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -40,7 +41,7 @@ func main() {
 		logger.Fatal("Failed to load config", err)
 	}
 
-	// Require an explicit DROIDMCP_ROOT. The shared config defaults ROOT to
+	// An explicit DROIDMCP_ROOT is mandatory. The shared config defaults ROOT to
 	// "/", which would expose (and let ffmpeg write into) the entire device;
 	// like mcp-filesystem, this server fail-fasts rather than silently acting
 	// on the whole filesystem. An empty value is treated as unset.
@@ -48,11 +49,16 @@ func main() {
 		logger.Log.Error("mcp-media requires DROIDMCP_ROOT to be set to the directory it may access. Refusing to start (the default of \"/\" would expose the whole device).")
 		os.Exit(1)
 	}
+	// An explicit "/" is just as broad as the default, so refuse it too.
+	if err := pathsec.ValidateRoot(cfg.Root); err != nil {
+		logger.Log.Error("mcp-media: " + err.Error())
+		os.Exit(1)
+	}
 
 	// This server reads ROOT, writes derived files into ROOT and spawns
 	// ffmpeg/exiftool, so it must not run unauthenticated: anything else on
-	// localhost (other apps, adb) could otherwise drive it. Require an API key,
-	// mirroring mcp-filesystem and mcp-termux.
+	// localhost (other apps, adb) could otherwise drive it. The API key is
+	// mandatory, as in mcp-filesystem and mcp-termux.
 	apiKey := config.ResolveAPIKey("media")
 	if apiKey == "" {
 		logger.Log.Error("mcp-media requires DROIDMCP_MEDIA_KEY or DROIDMCP_API_KEY to be set. Refusing to start.")
@@ -122,64 +128,9 @@ func registerTools(s *core.DroidServer) {
 
 // securePath resolves a relative path against DROIDMCP_ROOT and ensures it stays
 // within bounds. It returns an absolute path or an error if a traversal attempt
-// is detected. It is identical in behaviour to mcp-filesystem's securePath:
-// a lexical containment check plus a symlink-escape check that fails closed.
+// is detected; the containment rules live in internal/pathsec.
 func securePath(relPath string) (string, error) {
-	if filepath.IsAbs(relPath) {
-		return "", fmt.Errorf("absolute paths are not allowed: %s", relPath)
-	}
-	absRoot, err := filepath.Abs(cfg.Root)
-	if err != nil {
-		return "", err
-	}
-	target := filepath.Join(absRoot, relPath)
-	absTarget, err := filepath.Abs(target)
-	if err != nil {
-		return "", err
-	}
-	if !withinRoot(absRoot, absTarget) {
-		return "", errors.New("access denied: path escapes root")
-	}
-	if err := checkNoSymlinkEscape(absRoot, absTarget); err != nil {
-		return "", err
-	}
-	return absTarget, nil
-}
-
-// withinRoot reports whether absTarget is root itself or a descendant of it.
-// Using root+separator prevents prefix false positives (/tmp/safe vs
-// /tmp/safevil).
-func withinRoot(root, absTarget string) bool {
-	return absTarget == root || strings.HasPrefix(absTarget, root+string(filepath.Separator))
-}
-
-// checkNoSymlinkEscape resolves symlinks in absTarget (and every parent
-// component) and verifies the real path stays within the real root. absTarget
-// need not exist yet: the longest existing ancestor is resolved and checked.
-// Any resolution error other than "does not exist" fails closed.
-func checkNoSymlinkEscape(absRoot, absTarget string) error {
-	realRoot, err := filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		return fmt.Errorf("cannot resolve root: %w", err)
-	}
-	cur := absTarget
-	for {
-		resolved, err := filepath.EvalSymlinks(cur)
-		if err == nil {
-			if !withinRoot(realRoot, resolved) {
-				return errors.New("access denied: path escapes root via symlink")
-			}
-			return nil
-		}
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("access denied: %w", err)
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return errors.New("access denied: path escapes root")
-		}
-		cur = parent
-	}
+	return pathsec.Secure(cfg.Root, relPath)
 }
 
 // mediaKind maps a lowercased file extension (with leading dot) to a media

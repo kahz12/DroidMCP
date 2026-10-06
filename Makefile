@@ -16,7 +16,7 @@ SERVICES        := filesystem github scraper termux network clipboard media sqli
 build:
 	@echo "Building binaries (reproducible, version $(VERSION))..."
 	@mkdir -p bin
-	@for s in $(SERVICES); do \
+	@set -e; for s in $(SERVICES); do \
 		go build $(GOFLAGS_REPRO) -ldflags="$(LDFLAGS_REPRO)" -o bin/droidmcp-$$s ./cmd/$$s; \
 	done
 

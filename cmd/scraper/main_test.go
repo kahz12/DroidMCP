@@ -139,6 +139,103 @@ func TestHandleExtractTextSelectorNoMatch(t *testing.T) {
 	}
 }
 
+func TestHandleExtractLinks(t *testing.T) {
+	srv := localTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body>
+<a href="/root" rel="nofollow" title="Root">  Root link  </a>
+<a href="https://other.example/abs">Abs</a>
+<a href="">empty</a>
+<a href="   ">blank</a>
+<a>no href</a>
+<nav><a href="sibling.html">Sibling</a></nav>
+</body></html>`))
+	}))
+	extract := func(args map[string]any) linksResult {
+		t.Helper()
+		args["url"] = srv.URL + "/dir/page"
+		res, _ := handleExtractLinks(context.Background(), callRequest(args))
+		text, isErr := resultText(t, res)
+		if isErr {
+			t.Fatalf("unexpected error: %s", text)
+		}
+		var got linksResult
+		if err := json.Unmarshal([]byte(text), &got); err != nil {
+			t.Fatalf("not JSON: %v", err)
+		}
+		return got
+	}
+
+	// Empty or blank hrefs are dropped; relative ones resolve against the page.
+	got := extract(map[string]any{})
+	want := []linkItem{
+		{Href: srv.URL + "/root", Text: "Root link", Rel: "nofollow", Title: "Root"},
+		{Href: "https://other.example/abs", Text: "Abs"},
+		{Href: srv.URL + "/dir/sibling.html", Text: "Sibling"},
+	}
+	if got.Count != len(want) || len(got.Items) != len(want) {
+		t.Fatalf("got %d links %+v, want %d", got.Count, got.Items, len(want))
+	}
+	for i := range want {
+		if got.Items[i] != want[i] {
+			t.Errorf("link %d = %+v, want %+v", i, got.Items[i], want[i])
+		}
+	}
+
+	if got := extract(map[string]any{"selector": "nav a"}); got.Count != 1 || got.Items[0].Text != "Sibling" {
+		t.Fatalf("selector nav a: got %+v", got.Items)
+	}
+}
+
+func TestHandleExtractTable(t *testing.T) {
+	srv := localTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body>
+<table id="people">
+  <thead><tr><th>Name</th><th>Age</th></tr></thead>
+  <tbody>
+    <tr><td> Ana </td><td>30</td></tr>
+    <tr><td>Luis</td><td>25</td><td>extra</td></tr>
+  </tbody>
+</table>
+<table id="plain">
+  <tr><td>K</td><td>V</td></tr>
+  <tr><td>a</td><td>1</td></tr>
+</table>
+<table id="header-only"><tr><th>Only</th></tr></table>
+</body></html>`))
+	}))
+	extract := func(args map[string]any) tableResult {
+		t.Helper()
+		args["url"] = srv.URL
+		res, _ := handleExtractTable(context.Background(), callRequest(args))
+		text, isErr := resultText(t, res)
+		if isErr {
+			t.Fatalf("unexpected error: %s", text)
+		}
+		var got tableResult
+		if err := json.Unmarshal([]byte(text), &got); err != nil {
+			t.Fatalf("not JSON: %v", err)
+		}
+		return got
+	}
+
+	// thead supplies the headers, a table without one uses its first row, cells
+	// past the headers become colN, and a table with no data rows is omitted.
+	got := extract(map[string]any{})
+	want := [][]map[string]string{
+		{{"Name": "Ana", "Age": "30"}, {"Name": "Luis", "Age": "25", "col2": "extra"}},
+		{{"K": "a", "V": "1"}},
+	}
+	gotJSON, _ := json.Marshal(got.Tables)
+	wantJSON, _ := json.Marshal(want)
+	if got.Count != len(want) || string(gotJSON) != string(wantJSON) {
+		t.Fatalf("tables = %s (count %d), want %s", gotJSON, got.Count, wantJSON)
+	}
+
+	if got := extract(map[string]any{"selector": "#plain"}); got.Count != 1 || got.Tables[0][0]["K"] != "a" {
+		t.Fatalf("selector #plain: got %+v", got.Tables)
+	}
+}
+
 func TestFetchCacheHit(t *testing.T) {
 	var hits atomic.Int32
 	srv := localTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

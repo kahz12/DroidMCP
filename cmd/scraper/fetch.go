@@ -26,6 +26,7 @@ const (
 	defaultMaxBodyBytes   = 10 * 1024 * 1024 // 10 MiB
 	maxWaitAttempts       = 10
 	defaultWaitInterval   = 1 * time.Second
+	maxWaitInterval       = 30 * time.Second
 )
 
 // fetchOptions is the per-call surface every handler can populate from MCP
@@ -71,6 +72,9 @@ func (o *fetchOptions) normalize() {
 		if o.WaitInterval <= 0 {
 			o.WaitInterval = defaultWaitInterval
 		}
+		if o.WaitInterval > maxWaitInterval {
+			o.WaitInterval = maxWaitInterval
+		}
 	}
 }
 
@@ -96,12 +100,22 @@ func fetch(ctx context.Context, opts fetchOptions) (*cachedResponse, error) {
 	}
 
 	key := cacheKey(opts)
+	// stale is a cached page that does not satisfy WaitSelector. It is not served
+	// (the page may have finished loading since), but it is what a failing
+	// network falls back to, as a plain fetch of the same URL would.
+	var stale *cachedResponse
 	if !opts.NoCache {
 		if hit, ok := fetchCache.Get(key); ok {
-			// Defensive copy so callers cannot mutate the cached entry.
-			out := *hit
-			out.FromCache = true
-			return &out, nil
+			if int64(len(hit.Body)) > opts.MaxBodyBytes {
+				return nil, fmt.Errorf("response exceeded max body size of %d bytes", opts.MaxBodyBytes)
+			}
+			if opts.WaitSelector == "" || selectorMatches(hit.Body, opts.WaitSelector) {
+				// Defensive copy so callers cannot mutate the cached entry.
+				out := hit.clone()
+				out.FromCache = true
+				return out, nil
+			}
+			stale = hit
 		}
 	}
 
@@ -130,13 +144,18 @@ func fetch(ctx context.Context, opts fetchOptions) (*cachedResponse, error) {
 		}
 	}
 	if last == nil {
+		if stale != nil {
+			out := stale.clone()
+			out.FromCache = true
+			return out, nil
+		}
 		if lastErr != nil {
 			return nil, lastErr
 		}
 		return nil, errors.New("fetch produced no response")
 	}
 	if !opts.NoCache {
-		fetchCache.Set(key, last)
+		fetchCache.Set(key, last.clone())
 	}
 	return last, nil
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kahz12/droidmcp/internal/core"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -31,9 +32,9 @@ var (
 )
 
 // preflight validates a source/destination pair for the transform tools:
-// both resolve safely under root, differ, the source exists as a file, and the
-// destination's parent directory is created. On failure it returns a ready
-// error result; on success errResult is nil.
+// both resolve safely under root, name different files, the source exists as a
+// file, and the destination's parent directory is created. On failure it
+// returns a ready error result; on success errResult is nil.
 func preflight(srcRel, dstRel string) (src, dst string, errResult *mcp.CallToolResult) {
 	src, err := securePath(srcRel)
 	if err != nil {
@@ -43,8 +44,12 @@ func preflight(srcRel, dstRel string) (src, dst string, errResult *mcp.CallToolR
 	if err != nil {
 		return "", "", mcp.NewToolResultError(err.Error())
 	}
-	if src == dst {
-		return "", "", mcp.NewToolResultError("source and destination must differ")
+	// ffmpeg's image2 muxer expands printf-style patterns in the output name
+	// ("IMG%d.jpg" writes IMG1.jpg), so a destination that is not the source
+	// literally can still overwrite it — a file the same-file check below never
+	// sees. No legitimate caller needs a pattern for a single output file.
+	if strings.Contains(dstRel, "%") {
+		return "", "", mcp.NewToolResultError("destination must not contain '%'")
 	}
 	info, err := os.Stat(src)
 	if err != nil {
@@ -52,6 +57,13 @@ func preflight(srcRel, dstRel string) (src, dst string, errResult *mcp.CallToolR
 	}
 	if info.IsDir() {
 		return "", "", mcp.NewToolResultError("source is a directory")
+	}
+	// The destination must not be the source under another name (the same path,
+	// a hard link, or a symlink under root pointing back at it): ffmpeg opens
+	// the destination with -y (truncate) while still reading the input, which
+	// would destroy the source.
+	if dstInfo, statErr := os.Stat(dst); statErr == nil && os.SameFile(info, dstInfo) {
+		return "", "", mcp.NewToolResultError("source and destination are the same file")
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return "", "", mcp.NewToolResultError(err.Error())
@@ -258,15 +270,7 @@ func qualityToQV(quality int) int {
 // toolTimeout reads the optional timeout_seconds argument and clamps it to the
 // allowed range. 0 lets runTool apply its default.
 func toolTimeout(req mcp.CallToolRequest) time.Duration {
-	t := req.GetInt("timeout_seconds", 0)
-	if t <= 0 {
-		return 0
-	}
-	d := time.Duration(t) * time.Second
-	if d > maxToolTimeout {
-		return maxToolTimeout
-	}
-	return d
+	return core.TimeoutArg(req, 0, maxToolTimeout)
 }
 
 // renderMediaResult turns a completed tool run into the JSON tool response.

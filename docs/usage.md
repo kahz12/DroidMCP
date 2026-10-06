@@ -334,7 +334,10 @@ destination must be on the same filesystem.
 | `destination` | string | yes | Destination path relative to root. |
 
 **`copy_file`** — copy a file, or recursively copy a directory tree. File modes
-are preserved; symlinks encountered during a directory copy are skipped.
+are preserved (a copy made through a symlink keeps the target's mode); symlinks
+encountered during a directory copy are skipped. A directory cannot be copied
+into itself or onto one of its ancestors, including through a symlink alias, and
+the source must be a regular file or a directory (a FIFO is refused).
 
 | Argument | Type | Required | Description |
 |----------|------|:---:|-------------|
@@ -692,6 +695,9 @@ connection opened read-only (`mode=ro`), so the SQLite engine rejects any write
 — including one stacked after a `SELECT` (`SELECT 1; DELETE …`) or fronted by a
 CTE (`WITH … DELETE …`); the leading-keyword check (`SELECT`, `WITH`, `PRAGMA`,
 `EXPLAIN`, `VALUES`) is just a friendlier early error pointing you at `execute`.
+`query`, `execute` and `export_csv` all reject `ATTACH DATABASE` and
+`VACUUM … INTO`, which take a file path from the SQL text and would bypass the
+root confinement (plain `VACUUM` is allowed).
 Returns `{columns, rows, count, truncated}`, where `rows` is a JSON array of
 column-keyed objects and `truncated` is `true` when more rows existed than
 `max_rows` allowed. TEXT/BLOB values are returned as strings.
@@ -737,8 +743,12 @@ injection vector. Returns `{table, columns}` where each column is
 under root (a header row plus one row per record). Like `query` it runs on a
 read-only (`mode=ro`) connection, so a write cannot slip in through the `sql`
 argument. Returns `{path, rows, columns}`. The destination's parent directories
-are created; a failure mid-stream removes only a file this call created, never
-pre-existing data, and the destination must differ from the source database.
+are created. The CSV is written to a temporary file in the same directory,
+synced, and published with a rename only when the export completes, so a failure
+mid-stream never touches pre-existing data. New files are private (`0600`); an
+existing destination keeps its permissions, a read-only one is refused, and a
+symlink destination is written through instead of being replaced. The directory
+must be writable, and the destination must differ from the source database.
 
 | Argument | Type | Required | Default | Description |
 |----------|------|:---:|---------|-------------|

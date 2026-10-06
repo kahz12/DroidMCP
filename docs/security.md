@@ -37,26 +37,26 @@ Mitigations the codebase currently implements:
 | Host binding | Listener bound to `127.0.0.1`; every request must also present a loopback `Host` header (or one listed in `DROIDMCP_ALLOWED_HOSTS`), so a DNS-rebinding browser cannot drive the dev-mode servers. |
 | Headers | `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` on every response. |
 | Logging | `slog`-based, with credential redaction in attribute keys (`api_key`, `token`, `password`, …). |
-| `mcp-filesystem` | Requires an explicit `DROIDMCP_ROOT` and an API key. `securePath` rejects absolute paths and `..` traversal, then resolves symlinks and re-checks so a symlink under the root cannot point outside it. |
+| `mcp-filesystem` | Requires an explicit `DROIDMCP_ROOT` and an API key. `securePath` rejects absolute paths and `..` traversal, then resolves symlinks and re-checks so a symlink under the root cannot point outside it — including a dangling symlink, whose not-yet-existing target would otherwise be created outside the root by a write. A `DROIDMCP_ROOT` of `/` is refused at startup (filesystem, media and sqlite). `copy_file` compares real locations, so a directory cannot be copied into or over itself through a symlink alias. |
 | `mcp-scraper` | Anti-SSRF: rejects RFC1918 / loopback / link-local by default (override with `DROIDMCP_SCRAPER_ALLOW_PRIVATE=1`), validated at the URL, on every redirect, and on the concrete resolved IP the socket dials (closes DNS rebinding). |
 | `mcp-termux` `run_command` | `env_extra` rejects dynamic-linker overrides (`LD_*`, `DYLD_*`) so a caller cannot `LD_PRELOAD` past the command allowlist. |
 | `mcp-network` | Refuses public targets by default (override with `DROIDMCP_NETWORK_ALLOW_PUBLIC=1`). |
 | `mcp-termux` | Optional allowlist via `DROIDMCP_TERMUX_ALLOWLIST=cmd1,cmd2,…`; `install_pkg` quotes the package name (`pkg install -- <name>`). |
 | `mcp-clipboard` | All inputs piped via stdin, never embedded in shell arguments. |
-| `mcp-sqlite` | Requires `DROIDMCP_ROOT` + an API key; values bind as `?` parameters; `describe_table` validates the table name against the schema before quoting it; the read tools (`query`, `list_tables`, `describe_table`, `export_csv`) run on a `mode=ro` connection so the engine rejects any write, even one stacked after a `SELECT` or fronted by a CTE. |
+| `mcp-sqlite` | Requires `DROIDMCP_ROOT` + an API key; values bind as `?` parameters; `describe_table` validates the table name against the schema before quoting it; the read tools (`query`, `list_tables`, `describe_table`, `export_csv`) run on a `mode=ro` connection so the engine rejects any write, even one stacked after a `SELECT` or fronted by a CTE. `ATTACH DATABASE` and `VACUUM … INTO` are rejected by every SQL tool (`query`, `execute`, `export_csv`): they take a file path from the SQL text and would read or write files outside the root. |
 | `mcp-contacts` | Read-only. The `termux-contact-list` backend takes no arguments; every filter (`query`, `name`, `number`) is applied in memory, so no caller-supplied text reaches a command line — there is no argument-injection surface. Dev mode is allowed on loopback, but a key is recommended because the address book is personal data. |
 | `mcp-sms` | Highest-privilege Termux:API server — no dev mode (refuses to start unkeyed), since reading exposes OTP/2FA codes and `send_sms` dispatches a real, billable, irreversible message. `send_sms` recipients are validated against `^\+?[0-9]{3,}$` and passed as a single argv element; the body is delivered on **stdin**, never as an argument, so message content cannot be parsed as an option or reach a shell. `list_sms`/`search_sms` build argv only from a validated `type` enum and integers; search filtering is in-memory. |
 | `mcp-llm-proxy` | The inverse of the scraper's problem: the destination is fixed by the operator (`DROIDMCP_OLLAMA_HOST`) and is never taken from a tool argument, so a calling model cannot redirect its own prompts. The resolved address must be loopback / RFC1918 / link-local / CGNAT or the server refuses to start; sending prompts to a public host takes an explicit `DROIDMCP_LLMPROXY_ALLOW_REMOTE=1`. That policy is enforced three times, since a single startup check is not enough: on the configured address, again on the concrete post-resolution IP at dial time (`net.Dialer.Control`, closing the re-resolution window for a hostname), and by refusing every redirect (Go replays the request body on a 307, so a `Location` header would otherwise forward the prompt verbatim to an unvetted host). The transport also ignores `HTTP_PROXY` so no proxy can divert traffic past those checks, responses are capped at 32 MiB, and no subprocess is ever spawned. Dev mode is allowed: it reads no device data and writes nothing. |
 
-Known gaps that operators should keep in mind (tracked in `AUDIT_REPORT.txt`):
+Known gaps that operators should keep in mind:
 
-- `securePath` now resolves symlinks and re-checks containment (audit
-  item 2.2 closed), but the check is not fully TOCTOU-proof: a process
-  that can swap a symlink *inside the root* between the check and the
-  operation could still race it. Don't mount a root that other
-  untrusted processes can write to.
-- No rate limit yet (audit 2.7). Pair the server with a reverse proxy
-  if you need one.
+- `securePath` resolves symlinks and re-checks containment, but the
+  check is not fully TOCTOU-proof: a process that can swap a symlink
+  *inside the root* between the check and the operation could still
+  race it. Don't mount a root that other untrusted processes can write
+  to.
+- No rate limit yet. Pair the server with a reverse proxy if you need
+  one.
 
 ## Authentication
 
@@ -188,7 +188,7 @@ The directory must exist and be a directory; startup fail-fasts with a
 descriptive error otherwise (`DROIDMCP_ROOT "<path>": not a
 directory`). `securePath` resolves symlinks and re-verifies containment,
 so a symlink under the root pointing elsewhere is rejected rather than
-followed (audit item 2.2). The resolution is not fully TOCTOU-proof, so
+followed. The resolution is not fully TOCTOU-proof, so
 still avoid mounting a root other untrusted processes can write to.
 
 ## `mcp-clipboard` requirements
@@ -261,16 +261,15 @@ If you do not need shell access, do not start `droidmcp-termux`.
 ## Scraper and network defaults
 
 `mcp-scraper` rejects RFC1918 / link-local / loopback URLs by default
-to prevent SSRF (audit 2.1). Override on a hardened, isolated host
-only:
+to prevent SSRF. Override on a hardened, isolated host only:
 
 ```bash
 export DROIDMCP_SCRAPER_ALLOW_PRIVATE=1
 ```
 
 `mcp-network` refuses non-RFC1918 targets by default to prevent
-turning the device into a port scanner against the public internet
-(audit 2.10). Same override pattern:
+turning the device into a port scanner against the public internet.
+Same override pattern:
 
 ```bash
 export DROIDMCP_NETWORK_ALLOW_PUBLIC=1

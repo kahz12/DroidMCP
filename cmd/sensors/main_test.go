@@ -159,6 +159,35 @@ func TestGetBatteryNonZeroExit(t *testing.T) {
 	}
 }
 
+func TestGetWifiInfo(t *testing.T) {
+	dir := fakeBinDir(t)
+	// Report the argument count too: the command takes none.
+	fakeBin(t, dir, binWifiInfo, `echo "{\"ssid\":\"home\",\"rssi\":-60,\"argc\":$#}"`)
+
+	got, isErr := resultText(t, mustCall(t, handleGetWifiInfo, nil))
+	if isErr {
+		t.Fatalf("unexpected error: %s", got)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(got), &out); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, got)
+	}
+	if out["ssid"] != "home" || out["rssi"] != -60.0 || out["argc"] != 0.0 {
+		t.Errorf("unexpected passthrough: %v", out)
+	}
+}
+
+func TestGetWifiInfoMissingBinary(t *testing.T) {
+	prev := lookPath
+	lookPath = func(string) (string, error) { return "", errors.New("not found") }
+	t.Cleanup(func() { lookPath = prev })
+
+	got, isErr := resultText(t, mustCall(t, handleGetWifiInfo, nil))
+	if !isErr || !strings.Contains(got, binWifiInfo) {
+		t.Fatalf("got %q (error=%v), want a missing-binary error naming %s", got, isErr, binWifiInfo)
+	}
+}
+
 func TestGetLocationArgsAndValidation(t *testing.T) {
 	dir := fakeBinDir(t)
 	// Echo the arguments back so the test can assert flag wiring.

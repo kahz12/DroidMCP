@@ -309,14 +309,7 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
 // timeoutFromReq pulls timeout_seconds from the request and clamps to the
 // allowed range. 0 means "let runCommand pick the default".
 func timeoutFromReq(req mcp.CallToolRequest) time.Duration {
-	t := req.GetInt("timeout_seconds", 0)
-	if t <= 0 {
-		return 0
-	}
-	if time.Duration(t)*time.Second > maxExecTimeout {
-		return maxExecTimeout
-	}
-	return time.Duration(t) * time.Second
+	return core.TimeoutArg(req, 0, maxExecTimeout)
 }
 
 // stringMapArg pulls a string->string map out of a JSON-decoded object arg,

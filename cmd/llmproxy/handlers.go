@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kahz12/droidmcp/internal/core"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -31,14 +32,7 @@ const (
 // callTimeout reads the optional timeout_seconds argument, falling back to def
 // and clamping to maxTimeout.
 func callTimeout(req mcp.CallToolRequest, def time.Duration) time.Duration {
-	d := time.Duration(req.GetInt("timeout_seconds", 0)) * time.Second
-	if d <= 0 {
-		d = def
-	}
-	if d > maxTimeout {
-		d = maxTimeout
-	}
-	return d
+	return core.TimeoutArg(req, def, maxTimeout)
 }
 
 func handleListModels(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

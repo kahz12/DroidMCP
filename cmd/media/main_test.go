@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -406,6 +408,48 @@ func TestPreflight(t *testing.T) {
 			t.Fatalf("expected error for escaping destination")
 		}
 	})
+
+	// A destination that is a second name for the source (hard link, or a
+	// symlink under root pointing back at it) must be refused: ffmpeg opens the
+	// output with -y, truncating the very file it is still reading.
+	for _, kind := range []string{"hardlink", "symlink"} {
+		t.Run(kind+" to the source rejected", func(t *testing.T) {
+			link := os.Link
+			if kind == "symlink" {
+				link = os.Symlink
+			}
+			alias := kind + ".png"
+			if err := link(filepath.Join(root, "in.png"), filepath.Join(root, alias)); err != nil {
+				t.Skipf("%s unsupported in this environment: %v", kind, err)
+			}
+			if _, _, errRes := preflight("in.png", alias); errRes == nil {
+				t.Fatal("accepted a destination that is the same file as the source")
+			}
+		})
+	}
+
+	// ffmpeg's image2 muxer turns "IMG%d.jpg" into IMG1.jpg, which would
+	// overwrite a source named that way though no file has the literal pattern name.
+	t.Run("pattern destination rejected", func(t *testing.T) {
+		touch(t, root, "IMG1.jpg")
+		for _, dst := range []string{"IMG%d.jpg", "IMG%03d.jpg", "out/%d.png"} {
+			if _, _, errRes := preflight("IMG1.jpg", dst); errRes == nil {
+				t.Errorf("accepted pattern destination %q", dst)
+			}
+		}
+	})
+
+	// A dangling in-root symlink must not let ffmpeg (-y) create its output
+	// outside root.
+	t.Run("dangling symlink out of root rejected", func(t *testing.T) {
+		outside := filepath.Join(t.TempDir(), "evil.png")
+		if err := os.Symlink(outside, filepath.Join(root, "evil.png")); err != nil {
+			t.Skipf("symlinks unsupported in this environment: %v", err)
+		}
+		if _, _, errRes := preflight("in.png", "evil.png"); errRes == nil {
+			t.Fatal("accepted a destination that is a dangling symlink out of root")
+		}
+	})
 }
 
 func TestTailString(t *testing.T) {
@@ -553,5 +597,185 @@ func TestFailedConvertLeavesNoOutput(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "out", "broken.jpg")); !os.IsNotExist(err) {
 		t.Errorf("partial output should not survive a failed run (stat err = %v)", err)
+	}
+}
+
+// fakeFFmpeg points DROIDMCP_MEDIA_FFMPEG at a stand-in script so the transform
+// handlers run without a real ffmpeg (CI has none, and the integration tests
+// above skip there). The script records its argv one per line, writes its last
+// argument (the output path) as ffmpeg would, and exits with exitCode. It
+// returns the file holding the recorded argv.
+func fakeFFmpeg(t *testing.T, exitCode int) string {
+	t.Helper()
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	bin := filepath.Join(dir, "ffmpeg")
+	script := "#!" + sh + "\n" +
+		"printf '%s\\n' \"$@\" > \"$FAKE_FFMPEG_ARGS\"\n" +
+		"for out; do :; done\n" +
+		"printf fake > \"$out\"\n" +
+		"exit " + strconv.Itoa(exitCode) + "\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envFFmpeg, bin)
+	t.Setenv("FAKE_FFMPEG_ARGS", argsFile)
+	return argsFile
+}
+
+type mediaHandler = func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+
+func TestTransformHandlersWithFakeFFmpeg(t *testing.T) {
+	cases := []struct {
+		name     string
+		handler  mediaHandler
+		src, dst string
+		extra    map[string]any
+		argv     func(src, dst string) []string
+	}{
+		{
+			name: "convert_image", handler: handleConvertImage,
+			src: "in.png", dst: "out/small.jpg",
+			extra: map[string]any{"width": 32, "quality": 90},
+			argv: func(src, dst string) []string {
+				return []string{"-y", "-i", src, "-vf", "scale=32:-1", "-q:v", strconv.Itoa(qualityToQV(90)), dst}
+			},
+		},
+		{
+			name: "thumbnail", handler: handleThumbnail,
+			src: "clip.mp4", dst: "thumbs/t.jpg",
+			extra: map[string]any{"timestamp": "00:00:05"},
+			argv: func(src, dst string) []string {
+				return []string{"-y", "-ss", "00:00:05", "-i", src, "-frames:v", "1", "-vf", "scale=320:-1", dst}
+			},
+		},
+		{
+			name: "extract_audio", handler: handleExtractAudio,
+			src: "clip.mp4", dst: "audio/a.mp3",
+			extra: map[string]any{"codec": "mp3", "bitrate": "192k"},
+			argv: func(src, dst string) []string {
+				return []string{"-y", "-i", src, "-vn", "-acodec", "mp3", "-b:a", "192k", dst}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := withRoot(t)
+			touch(t, root, tc.src)
+			argsFile := fakeFFmpeg(t, 0)
+			args := map[string]any{"source": tc.src, "destination": tc.dst}
+			for k, v := range tc.extra {
+				args[k] = v
+			}
+
+			got, isErr := resultText(t, mustCall(t, tc.handler, args))
+			if isErr {
+				t.Fatalf("%s failed: %s", tc.name, got)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(got), &payload); err != nil || payload["ok"] != true {
+				t.Fatalf("unexpected result: %s (%v)", got, err)
+			}
+			recorded, err := os.ReadFile(argsFile)
+			if err != nil {
+				t.Fatalf("ffmpeg was not run: %v", err)
+			}
+			want := tc.argv(filepath.Join(root, tc.src), filepath.Join(root, tc.dst))
+			if strings.TrimSuffix(string(recorded), "\n") != strings.Join(want, "\n") {
+				t.Fatalf("argv:\n%s\nwant:\n%s", recorded, strings.Join(want, "\n"))
+			}
+		})
+	}
+}
+
+// Every transform handler must go through preflight: a destination that is the
+// source under another name, or a pattern ffmpeg would expand onto it, is
+// refused before ffmpeg runs.
+func TestTransformHandlersRejectUnsafeDestinations(t *testing.T) {
+	handlers := map[string]mediaHandler{
+		"convert_image": handleConvertImage,
+		"thumbnail":     handleThumbnail,
+		"extract_audio": handleExtractAudio,
+	}
+	for name, handler := range handlers {
+		t.Run(name, func(t *testing.T) {
+			root := withRoot(t)
+			src := filepath.Join(root, "IMG1.jpg")
+			if err := os.WriteFile(src, []byte("original"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			dsts := []string{"IMG1.jpg", "IMG%d.jpg"}
+			if err := os.Link(src, filepath.Join(root, "alias.jpg")); err == nil {
+				dsts = append(dsts, "alias.jpg")
+			}
+			argsFile := fakeFFmpeg(t, 0)
+
+			for _, dst := range dsts {
+				if _, isErr := resultText(t, mustCall(t, handler, map[string]any{"source": "IMG1.jpg", "destination": dst})); !isErr {
+					t.Errorf("accepted destination %q", dst)
+				}
+			}
+			if _, err := os.Stat(argsFile); err == nil {
+				t.Fatal("ffmpeg ran for a rejected destination")
+			}
+			if data, err := os.ReadFile(src); err != nil || string(data) != "original" {
+				t.Fatalf("source changed: %q %v", data, err)
+			}
+		})
+	}
+}
+
+// A failed run reports an error and removes the output it created, without a
+// real ffmpeg.
+func TestFailedRunRemovesNewOutput(t *testing.T) {
+	root := withRoot(t)
+	touch(t, root, "in.png")
+	fakeFFmpeg(t, 1)
+
+	got, isErr := resultText(t, mustCall(t, handleConvertImage, map[string]any{"source": "in.png", "destination": "out.jpg"}))
+	if !isErr || !strings.Contains(got, `"partial_output_removed":true`) {
+		t.Fatalf("expected a failure that removed the partial output, got: %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, "out.jpg")); !os.IsNotExist(err) {
+		t.Fatalf("partial output survived: %v", err)
+	}
+}
+
+func TestToolTimeout(t *testing.T) {
+	if got := toolTimeout(callRequest(nil)); got != 0 {
+		t.Errorf("absent timeout_seconds = %v, want 0 (runTool's default)", got)
+	}
+	if got := toolTimeout(callRequest(map[string]any{"timeout_seconds": 30.0})); got != 30*time.Second {
+		t.Errorf("timeout_seconds=30 = %v", got)
+	}
+	if got := toolTimeout(callRequest(map[string]any{"timeout_seconds": 1e6})); got != maxToolTimeout {
+		t.Errorf("timeout_seconds=1e6 = %v, want the %v cap", got, maxToolTimeout)
+	}
+}
+
+// main must refuse an explicit DROIDMCP_ROOT=/. That check lives in main, which
+// exits, so the test re-runs its own binary as a child process that calls main.
+func TestMainRefusesFilesystemRoot(t *testing.T) {
+	if os.Getenv("DROIDMCP_TEST_RUN_MAIN") == "1" {
+		main()
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMainRefusesFilesystemRoot$")
+	// No API key in the environment: without the root check, main would exit
+	// for that reason instead (rejected below) rather than start serving.
+	cmd.Env = []string{"DROIDMCP_TEST_RUN_MAIN=1", "DROIDMCP_ROOT=/"}
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("main with DROIDMCP_ROOT=/: %v, want exit status 1\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "is the filesystem root") {
+		t.Fatalf("main exited for another reason:\n%s", out)
 	}
 }

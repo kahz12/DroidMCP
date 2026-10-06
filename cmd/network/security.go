@@ -2,7 +2,7 @@
 // that is not RFC1918 / link-local / loopback / IPv6 ULA, because scanning
 // the open internet from a user's phone is at best impolite and in some
 // jurisdictions illegal. Operators that genuinely need to scan a public
-// target opt in via DROIDMCP_NETWORK_ALLOW_PUBLIC=1 (audit 2.10 [MED]).
+// target opt in via DROIDMCP_NETWORK_ALLOW_PUBLIC=1.
 package main
 
 import (

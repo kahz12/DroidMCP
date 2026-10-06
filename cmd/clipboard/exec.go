@@ -53,8 +53,8 @@ type clipboardResult struct {
 }
 
 // runClipboardCmd invokes a termux-clipboard-* binary, capturing stdout and
-// stderr separately into capped buffers (closes audit 2.6: no more
-// CombinedOutput) and applying a per-call timeout.
+// stderr separately into capped buffers (never CombinedOutput, so the two
+// streams stay distinguishable) and applying a per-call timeout.
 func runClipboardCmd(ctx context.Context, name string, args []string, stdin []byte) (*clipboardResult, error) {
 	cctx, cancel := context.WithTimeout(ctx, defaultExecTimeout)
 	defer cancel()

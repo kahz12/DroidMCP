@@ -264,6 +264,101 @@ func TestHandleTracerouteRejectsPublicByDefault(t *testing.T) {
 	}
 }
 
+// tracerouteShims replaces PATH with a directory that holds only the named
+// tools, so chooseTracerouteTool sees exactly those. Each tool runs script.
+func tracerouteShims(t *testing.T, script string, names ...string) string {
+	t.Helper()
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skipf("/bin/sh not available: %v", err)
+	}
+	dir := t.TempDir()
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("DROIDMCP_NETWORK_ALLOW_PUBLIC", "")
+	return dir
+}
+
+const printArgv = "for a in \"$@\"; do printf '%s\\n' \"$a\"; done\n"
+
+func runTraceroute(t *testing.T, args map[string]any) (tracerouteResult, bool) {
+	t.Helper()
+	res, err := handleTraceroute(context.Background(), callRequest(args))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, isErr := resultText(t, res)
+	var got tracerouteResult
+	if err := json.Unmarshal([]byte(text), &got); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, text)
+	}
+	return got, isErr
+}
+
+// The external tool must receive the IP validateTarget approved, never the
+// hostname: re-resolving it could reach a different (public) address.
+func TestTracerouteTracesValidatedIP(t *testing.T) {
+	if _, err := net.LookupIP("localhost"); err != nil {
+		t.Skipf("localhost does not resolve here: %v", err)
+	}
+	dir := tracerouteShims(t, printArgv, "tracepath", "traceroute")
+	got, isErr := runTraceroute(t, map[string]any{"host": "localhost"})
+	if isErr {
+		t.Fatalf("unexpected error: %+v", got)
+	}
+	if got.Tool != filepath.Join(dir, "tracepath") {
+		t.Errorf("tool = %q, want tracepath preferred", got.Tool)
+	}
+	argv := strings.Fields(got.Raw)
+	if len(argv) != 4 || argv[0] != "-n" || argv[1] != "-m" || argv[2] != "30" {
+		t.Fatalf("argv = %q, want -n -m 30 <ip>", argv)
+	}
+	if ip := net.ParseIP(argv[3]); ip == nil || !ip.IsLoopback() {
+		t.Fatalf("traced %q, want the resolved loopback IP rather than the hostname", argv[3])
+	}
+}
+
+func TestTracerouteMaxHopsAndFallback(t *testing.T) {
+	dir := tracerouteShims(t, printArgv, "traceroute")
+	for hops, want := range map[float64]string{5: "5", 64: "64", 0: "30", 65: "30", -1: "30"} {
+		got, isErr := runTraceroute(t, map[string]any{"host": "127.0.0.1", "max_hops": hops})
+		if isErr {
+			t.Fatalf("max_hops=%v: unexpected error: %+v", hops, got)
+		}
+		if got.Tool != filepath.Join(dir, "traceroute") {
+			t.Fatalf("tool = %q, want the traceroute fallback", got.Tool)
+		}
+		if argv := strings.Fields(got.Raw); strings.Join(argv, " ") != "-n -m "+want+" 127.0.0.1" {
+			t.Errorf("max_hops=%v: argv = %q, want -n -m %s 127.0.0.1", hops, argv, want)
+		}
+	}
+}
+
+func TestTracerouteWithoutTools(t *testing.T) {
+	tracerouteShims(t, "")
+	res, err := handleTraceroute(context.Background(), callRequest(map[string]any{"host": "127.0.0.1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, isErr := resultText(t, res); !isErr || !strings.Contains(text, "no tracepath or traceroute") {
+		t.Fatalf("got %q (error=%v), want the missing-tool error", text, isErr)
+	}
+}
+
+func TestTracerouteFailureKeepsOutput(t *testing.T) {
+	tracerouteShims(t, "echo 'network unreachable' >&2\nexit 2\n", "tracepath")
+	got, isErr := runTraceroute(t, map[string]any{"host": "127.0.0.1"})
+	if !isErr {
+		t.Fatalf("expected an error result, got %+v", got)
+	}
+	if !strings.Contains(got.Raw, "network unreachable") || !strings.Contains(got.Raw, "exit status 2") {
+		t.Fatalf("raw = %q, want the tool output and its exit status", got.Raw)
+	}
+}
+
 func intStr(i int) string {
 	if i == 0 {
 		return "0"
@@ -294,6 +389,3 @@ func sliceContains(s []string, want string) bool {
 	}
 	return false
 }
-
-// Stop unused-import warnings if we ever drop the imports.
-var _ = strings.TrimSpace

@@ -27,9 +27,10 @@ release/
 *.dylib
 __debug_bin*
 
-# Test and coverage output
+# Test, coverage and benchmark output
 *.test
 *.out
+*.prof
 coverage.html
 
 # Dependency directories
@@ -46,6 +47,8 @@ go.work.sum
 !.env.example
 *.pem
 *.key
+*.crt
+*.csr
 *.p12
 *.pfx
 
@@ -54,7 +57,15 @@ go.work.sum
 *.db
 *.sqlite
 *.sqlite3
+# SQLite journal / WAL sidecars that sit next to a database file
+*.db-*
+*.sqlite-*
+*.sqlite3-*
 network-devices.json
+# Temp files left behind when a process dies mid-write (inventory persist,
+# export_csv staging file)
+network-devices.json.tmp
+.droidmcp-export-*.csv
 
 # IDEs
 .idea/

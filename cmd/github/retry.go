@@ -24,7 +24,7 @@ const (
 )
 
 // retryBaseDelay is a var (not const) so tests can shrink it without waiting
-// the full backoff window. Production callers should leave it alone.
+// the full backoff window. Only tests reassign it.
 var retryBaseDelay = 1 * time.Second
 
 // retryTransport retries idempotent (GET/HEAD) requests on 5xx and 429.
@@ -116,6 +116,11 @@ func parseRetryAfter(value string) time.Duration {
 		return 0
 	}
 	if secs, err := strconv.Atoi(value); err == nil && secs > 0 {
+		// Clamp before multiplying: a huge value would wrap time.Duration to a
+		// tiny or negative delay instead of the retryMaxDelay cap.
+		if secs > int(retryMaxDelay/time.Second) {
+			return retryMaxDelay
+		}
 		return time.Duration(secs) * time.Second
 	}
 	if t, err := http.ParseTime(value); err == nil {

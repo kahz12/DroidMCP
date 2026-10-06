@@ -59,7 +59,7 @@ func main() {
 	// mcp-github drives the GitHub API with a token that can read private repos
 	// and push commits/PRs, so it must not run unauthenticated: anything else on
 	// localhost (other apps, adb) could otherwise operate GitHub as the user.
-	// Require an API key, mirroring mcp-filesystem / mcp-termux.
+	// The API key is mandatory, as in mcp-filesystem / mcp-termux.
 	apiKey := config.ResolveAPIKey("github")
 	if apiKey == "" {
 		logger.Log.Error("mcp-github holds a GitHub token with full API access; refusing to start without DROIDMCP_GITHUB_KEY or DROIDMCP_API_KEY.")

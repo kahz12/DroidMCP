@@ -1,7 +1,7 @@
 // Command network provides an MCP server for local network discovery.
 // Every tool returns JSON. Targets are restricted to private ranges (RFC1918
 // + link-local + loopback + IPv6 ULA) by default; set
-// DROIDMCP_NETWORK_ALLOW_PUBLIC=1 to opt in to public targets (audit 2.10).
+// DROIDMCP_NETWORK_ALLOW_PUBLIC=1 to opt in to public targets.
 package main
 
 import (
@@ -319,8 +319,8 @@ func handleTraceroute(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 }
 
 // chooseTracerouteTool prefers `tracepath` (no root) on Termux/Android,
-// falling back to `traceroute -n` otherwise. The audit asks for "no root";
-// we never invoke ICMP traceroute.
+// falling back to `traceroute -n` otherwise. Nothing here needs root, so ICMP
+// traceroute is never invoked.
 func chooseTracerouteTool(host string, maxHops int) (string, []string, error) {
 	if path, err := exec.LookPath("tracepath"); err == nil {
 		return path, []string{"-n", "-m", strconv.Itoa(maxHops), host}, nil
@@ -398,15 +398,7 @@ func parsePorts(raw string) ([]int, error) {
 // durationFromReq pulls timeout_seconds from the request and clamps to the
 // allowed range, defaulting to def when absent or non-positive.
 func durationFromReq(req mcp.CallToolRequest, def, max time.Duration) time.Duration {
-	t := req.GetInt("timeout_seconds", 0)
-	if t <= 0 {
-		return def
-	}
-	d := time.Duration(t) * time.Second
-	if d > max {
-		return max
-	}
-	return d
+	return core.TimeoutArg(req, def, max)
 }
 
 func jsonResult(v any) (*mcp.CallToolResult, error) {

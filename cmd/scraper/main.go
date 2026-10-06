@@ -532,6 +532,11 @@ func parseFetchOptions(req mcp.CallToolRequest) (fetchOptions, error) {
 		opts.Timeout = time.Duration(t) * time.Second
 	}
 	if ms := req.GetInt("wait_interval_ms", 0); ms > 0 {
+		// Clamp before multiplying so a huge value cannot wrap time.Duration
+		// into a negative (ignored) or absurdly long interval.
+		if ms > int(maxWaitInterval/time.Millisecond) {
+			ms = int(maxWaitInterval / time.Millisecond)
+		}
 		opts.WaitInterval = time.Duration(ms) * time.Millisecond
 	}
 	return opts, nil

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -155,6 +156,20 @@ func TestNormalizeArg(t *testing.T) {
 	}
 	if got := normalizeArg(nil); got != nil {
 		t.Errorf("nil should pass through, got %v", got)
+	}
+	// Outside the int64 range a float must stay a float, not wrap to a wrong integer.
+	for _, value := range []float64{1e100, -1e100, 0x1p64, -0x1p64} {
+		if got, ok := normalizeArg(value).(float64); !ok || got != value {
+			t.Errorf("value %g was corrupted: %#v", value, normalizeArg(value))
+		}
+	}
+	// JSON 9223372036854775807 decodes to the float64 2^63. It must bind as the
+	// INTEGER MaxInt64 on every platform, not as a REAL and not as a wrapped value.
+	if got := normalizeArg(0x1p63); got != int64(math.MaxInt64) {
+		t.Errorf("2^63 = %#v, want int64 MaxInt64", got)
+	}
+	if got := normalizeArg(-0x1p63); got != int64(math.MinInt64) {
+		t.Errorf("-2^63 = %#v, want int64 MinInt64", got)
 	}
 }
 
