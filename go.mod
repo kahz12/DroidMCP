@@ -5,7 +5,7 @@ go 1.26.8
 require (
 	github.com/PuerkitoBio/goquery v1.13.0
 	github.com/google/go-github/v60 v60.0.0
-	github.com/mark3labs/mcp-go v0.48.0
+	github.com/mark3labs/mcp-go v1.3.0
 	github.com/spf13/viper v1.21.0
 	golang.org/x/oauth2 v0.37.0
 	modernc.org/sqlite v1.60.1
@@ -25,6 +25,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/sagikazarmark/locafero v0.11.0 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
