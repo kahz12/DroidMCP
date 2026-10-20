@@ -23,7 +23,7 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
 
 | Zero dependencies | Secure by default | Fourteen focused servers |
 |:---|:---|:---|
-| One static ARM64 binary per server, pure Go — no CGO, no interpreter, nothing else to install. | Loopback-only listener, API-key auth, optional TLS, sandboxed roots, redacted logs, signed releases. | Files, GitHub, web scraping, shell, LAN, clipboard, media, SQLite, device sensors, notifications, contacts, SMS, on-device LLMs, and scheduled tasks — each behind a small, auditable tool surface. |
+| One self-contained ARM64 binary per server, pure Go — no CGO, no interpreter, nothing else to install. | Loopback-only listener, API-key auth, optional TLS, sandboxed roots, redacted logs, signed releases. | Files, GitHub, web scraping, shell, LAN, clipboard, media, SQLite, device sensors, notifications, contacts, SMS, on-device LLMs, and scheduled tasks — each behind a small, auditable tool surface. |
 
 ```
       Claude Code · Gemini CLI · any MCP client
@@ -138,6 +138,10 @@ examples, lives in the [usage guide](docs/usage.md).
 <details>
 <summary><b>mcp-network</b> — LAN discovery via concurrent TCP probes</summary>
 <br>
+
+Android 11+ hides network interfaces from apps, so there the subnet to scan is
+the `/24` around the Wi-Fi address (read with `termux-api`) and `network_info`
+reports little beyond the DNS servers.
 
 | Tool | Description |
 |------|-------------|
@@ -351,6 +355,10 @@ make build                           # bin/droidmcp-<server>, one per server
 make install                         # optional: copy into $PREFIX/bin
 ```
 
+From a PC, `make build-arm64` cross-compiles for `android/arm64`. Build for
+`GOOS=android`, not `linux`: Android kills a `linux` binary the first time it
+runs a command.
+
 **Run** — export the server's requirements and start the binary; the MCP
 endpoint is `http://localhost:<port>/mcp` (Streamable HTTP), with the legacy SSE
 transport still at `/sse`:
@@ -461,7 +469,8 @@ cmd/<server>/       one main package per server (filesystem, github, scraper,
                     notifications, contacts, sms, llmproxy, automation)
 internal/           core — shared server (Streamable HTTP · SSE · stdio) ·
                     config · logger · pathsec (root containment) ·
-                    phone (SMS recipients) · buildinfo
+                    phone (SMS recipients) · dnsconf (DNS on Android) ·
+                    buildinfo
 docs/               usage guide (EN/ES) · security · Termux setup
 scripts/            reproducible ARM64 cross-build
 ```

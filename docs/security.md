@@ -239,8 +239,8 @@ persistence). Two env vars cap it:
 
 | Variable | Meaning | Default |
 |----------|---------|---------|
-| `DROIDMCP_CLIPBOARD_HISTORY_ENTRIES` | Max entries kept | server-defined |
-| `DROIDMCP_CLIPBOARD_HISTORY_BYTES`   | Max total bytes  | server-defined |
+| `DROIDMCP_CLIPBOARD_HISTORY_ENTRIES` | Max entries kept | `32` |
+| `DROIDMCP_CLIPBOARD_HISTORY_BYTES`   | Max total bytes  | `65536` (64 KiB) |
 
 Older entries are evicted FIFO when either cap is reached.
 
@@ -378,6 +378,26 @@ export DROIDMCP_NETWORK_ALLOW_PUBLIC=1
 
 Both knobs accept `1`, `true`, `yes`, `on` (case-insensitive).
 
+## DNS on Android
+
+Android has no `/etc/resolv.conf`, so the release binaries (built
+without cgo, which leaves Go's own resolver as the only one) fall back
+to the nameservers in Termux's `$PREFIX/etc/resolv.conf`; see
+`internal/dnsconf`. What that means for an operator:
+
+- Lookups go straight to those servers — public resolvers by default —
+  in plain DNS. They bypass Android's Private DNS and the DNS server a
+  VPN pushes, although the packets still travel through the VPN tunnel
+  if one is up. Edit that file to choose the resolvers.
+- LAN names (`desktop.lan`, a router's DHCP names) do not resolve
+  through public resolvers. Configure LAN hosts by IP, for example
+  `DROIDMCP_OLLAMA_HOST=192.168.1.20:11434`.
+- The SSRF and private-target checks are unchanged: they look at the
+  addresses a name resolves to, whichever resolver answered.
+
+A binary built in Termux with cgo resolves through Android's libc
+instead, which follows the network's DNS, Private DNS and VPNs.
+
 `mcp-network` also keeps a persistent inventory of every host seen by
 `scan_network` (IP, MAC, open ports, first/last seen) so `list_devices`
 and `get_device_info` can answer without re-scanning. It is written to
@@ -416,8 +436,8 @@ verification also queries the public Rekor transparency log, so it needs
 network access. Pin `@refs/tags/v0.4.0` instead of the `@refs/tags/v`
 prefix to accept exactly one release. The release build flags are
 reproducible (`-trimpath`, `-buildid=`), so rebuilding the tag with
-`scripts/build-arm64.sh` and the same Go release is expected to give the
-same hashes.
+`scripts/build-arm64.sh` and the same upstream Go release (not Termux's
+patched `golang`) is expected to give the same hashes.
 
 ## Production checklist
 

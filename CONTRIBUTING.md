@@ -32,11 +32,27 @@ make test                     # go test -race ./...
 
 Useful targets: `make vet`, `make fmt` / `make fmt-check`, `make lint`
 (golangci-lint, config in `.golangci.yml`), `make sec` (gosec),
-`make build-arm64` (cross-compile via `scripts/build-arm64.sh`).
+`make build-arm64` (cross-compile for `android/arm64` via
+`scripts/build-arm64.sh`).
 
-CI runs **test (plus an ARM64 cross-build) + lint + gosec + govulncheck** on
+CI runs **test (plus an android/arm64 cross-build and vet) + lint + gosec +
+govulncheck** on
 every push and PR; all four must be green. Run `go run
 golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...` locally for the last one.
+
+## Testing on a device
+
+CI runs the tests on Linux, which hides a class of Android-only failures:
+the app seccomp filter, no `/etc/resolv.conf`, Termux's `umask 077`, a
+`/bin/sh` (mksh) without a `printf` builtin, and Android 11+ blocking
+netlink and `/proc/net/route` for apps. When a change touches processes,
+the network, files or time zones, run the tests on a phone too: build
+them with `CGO_ENABLED=0 GOOS=android GOARCH=arm64 go test -c -o
+test-<pkg> ./<pkg>` and run the binaries **inside Termux** (for example
+over Termux's `sshd`), not through `adb shell`. `adb shell` runs as
+another user, outside the app sandbox, so it skips most of the above.
+`internal/config`'s port test reads `../../cmd`, so run that binary from
+a directory laid out like the repository.
 
 ## Repository layout
 
@@ -47,6 +63,7 @@ internal/config   DROIDMCP_* environment configuration, per-server default ports
 internal/logger   structured logging with secret redaction
 internal/pathsec  containment of caller paths in DROIDMCP_ROOT
 internal/phone    SMS recipient validation (mcp-sms, mcp-termux)
+internal/dnsconf  DNS via Termux's resolv.conf where Android has none
 internal/buildinfo  version stamped at build time
 ```
 

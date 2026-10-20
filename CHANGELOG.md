@@ -102,7 +102,8 @@ ships one ARM64 binary per server plus a cosign-signed `SHA256SUMS`.
 - Docs: fourteen servers, not thirteen; `mcp-scraper` runs on `net/http` +
   goquery (colly was dropped long ago, cobra never used); `mcp-media` and
   `mcp-sqlite` also require `DROIDMCP_ROOT`; every Termux:API server is listed
-  as needing the `termux-api` package.
+  as needing the `termux-api` package; `create_issue`'s `labels` argument and
+  the roadmap's tool tables were incomplete.
 - Build: the build loops stop at the first error, and `SHA256SUMS` no longer
   lists the per-binary `.sha256` files that are deleted afterwards.
 
@@ -116,6 +117,7 @@ ships one ARM64 binary per server plus a cosign-signed `SHA256SUMS`.
   (SSE), not `uri`.
 - Internal: `core.DroidServer.ServeSSE(port)` became `Serve(cfg)`, which picks
   the transport, and `config.LoadConfig()` takes the server name.
+- `mark3labs/mcp-go` 0.48.0 → 1.3.0.
 
 ### Upgrading
 
@@ -129,6 +131,8 @@ ships one ARM64 binary per server plus a cosign-signed `SHA256SUMS`.
   `DROIDMCP_PORT` now listens on its own port (e.g. `mcp-github` on `3001`), not
   on `3000`. Update the client URL or set `DROIDMCP_PORT`.
 - Point clients at `http://localhost:<port>/mcp`. `/sse` still works.
+- **Cross-compiling yourself?** Build for `GOOS=android` (`make build-arm64`
+  does). A `GOOS=linux` binary is killed in Termux on its first tool call.
 - If you configured Claude Code from the previous README snippet, register the
   server again with `claude mcp add` (see the
   [usage guide](docs/usage.md#talking-to-a-server)).

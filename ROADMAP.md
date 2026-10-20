@@ -1,7 +1,7 @@
 # DroidMCP Roadmap
 
 > Native MCP servers for Android/Termux — ARM64 binaries with zero external dependencies.
-> **Stack:** Go · HTTP/SSE · Monorepo · Target: Linux ARM64
+> **Stack:** Go · Streamable HTTP · SSE · stdio · Monorepo · Target: Android ARM64
 
 ---
 
@@ -56,6 +56,7 @@ DroidMCP/
 │   ├── logger/           slog with credential redaction
 │   ├── pathsec/          containment of paths in DROIDMCP_ROOT
 │   ├── phone/            SMS recipient validation
+│   ├── dnsconf/          DNS via Termux's resolv.conf where Android has none
 │   └── buildinfo/        version stamped at build time
 ├── scripts/
 │   └── build-arm64.sh
@@ -90,12 +91,15 @@ DroidMCP/
 - [x] `DROIDMCP_<SERVER>_RATE_LIMITS`: sliding-window caps on tool calls, per tool or per server, on every transport; SMS sending capped at 10/h by default
 - [x] `internal/logger/logger.go` — Shared structured logger
 - [x] `internal/config/config.go` — Environment variable config loader
+- [x] `internal/dnsconf` — DNS through Termux's `$PREFIX/etc/resolv.conf` for binaries without cgo, since Android has no `/etc/resolv.conf`
 
 ### Build Pipeline
 - [x] `scripts/build-arm64.sh` — Compiles all binaries for ARM64
 - [x] `Makefile` — Commands: `build`, `test`, `clean`, `install`
 - [x] `.github/workflows/build.yml` — CI/CD: auto build + release on each tag
 - [x] Supply chain: SHA-pinned third-party actions, pinned lint/gosec versions, `govulncheck`, android/arm64 build on every PR, Dependabot
+- [x] Release binaries built for `GOOS=android`: a `linux` build is killed by Android's seccomp filter on its first `exec.LookPath`
+- [x] Test suite run on a real device inside Termux (Android 15), not only on Linux CI
 
 ---
 
@@ -106,11 +110,14 @@ DroidMCP/
 | Tool              | Description                          |
 |-------------------|--------------------------------------|
 | `read_file`       | Read file contents                   |
+| `read_file_lines` | Read a range of lines                |
 | `write_file`      | Write/create a file                  |
 | `list_directory`  | List directory contents              |
+| `stat`            | File metadata (size, mode, mtime, owner) |
 | `search_files`    | Search files by name or pattern      |
 | `delete_file`     | Delete a file                        |
 | `move_file`       | Move or rename a file                |
+| `copy_file`       | Copy a file or directory tree        |
 
 ### Tasks
 - [x] Implement each tool with robust error handling
@@ -130,12 +137,25 @@ DroidMCP/
 |-------------------|--------------------------------------|
 | `list_repos`      | List user repositories               |
 | `get_repo`        | Detailed repo info                   |
+| `fork_repo`       | Fork a repository                    |
+| `list_branches`   | List branches                        |
+| `list_tags`       | List tags                            |
+| `list_releases`   | List releases                        |
+| `list_commits`    | List commits                         |
+| `get_commit`      | Get one commit by SHA or ref         |
 | `create_issue`    | Open an issue                        |
 | `list_issues`     | List issues from a repo              |
+| `comment_issue`   | Comment on an issue or PR            |
+| `close_issue`     | Close an issue                       |
+| `label_issue`     | Add or replace labels                |
 | `get_pr`          | Get pull request details             |
 | `create_pr`       | Create a Pull Request                |
+| `review_pr`       | Approve, request changes or comment  |
+| `merge_pr`        | Merge a Pull Request                 |
 | `commit_file`     | Commit a file                        |
 | `get_file`        | Read a file from the repo            |
+| `search_code`     | Search code across GitHub            |
+| `search_issues`   | Search issues and PRs                |
 
 ### Tasks
 - [x] Auth via `GITHUB_TOKEN` (Personal Access Token)
@@ -209,6 +229,7 @@ DroidMCP/
 - [x] Pure Go implementation (no Scapy/DroidNet subprocess needed)
 - [x] `scan_network` + `check_ports` with private-target guard (`DROIDMCP_NETWORK_ALLOW_PUBLIC` opt-in)
 - [x] DNS, traceroute, and network info tools with unit tests
+- [x] Subnet auto-detection on Android 11+, which hides interfaces from apps: the `/24` around the Wi-Fi address from `termux-wifi-connectioninfo`, flagged in `note`
 - [x] Persistent device inventory (`scan_network` feeds it; `get_device_info` / `list_devices` read it), path via `DROIDMCP_NETWORK_DB`
 - [x] Documentation on requirements and scoping (`docs/security.md`)
 
@@ -237,12 +258,13 @@ DroidMCP/
 |---------------------|----------------------------------------------|
 | `get_clipboard`     | Read current clipboard content               |
 | `set_clipboard`     | Write text to clipboard                      |
-| `clipboard_history` | Retrieve clipboard history (if available)    |
+| `clear_clipboard`   | Clear the clipboard and the history          |
+| `clipboard_history` | In-process history of clipboard writes       |
 
 ### Tasks
 - [x] Integrate `termux-clipboard-get` and `termux-clipboard-set`
 - [x] Handle text input/output via standard streams
-- [x] Implementation of `clipboard_history` (stub as not supported by API)
+- [x] `clipboard_history` as an in-process, bounded history of writes (Termux:API has no history), sized by `DROIDMCP_CLIPBOARD_HISTORY_*`
 - [x] Integration into build pipeline (Makefile/scripts)
 
 ---
@@ -294,6 +316,9 @@ DroidMCP/
 
 ### PHASE 10 — mcp-calendar
 > **Goal:** Calendar integration for scheduling and event management
+> **Blocked:** Termux:API has no calendar commands (there is no
+> `termux-calendar-list`), so this phase needs another backend before it
+> can start.
 
 #### MCP Tools
 | Tool                | Description                                  |
@@ -305,7 +330,8 @@ DroidMCP/
 | `check_availability`| Check free/busy time slots                   |
 
 #### Tasks
-- [ ] Integrate `termux-calendar-list` for reading events with date range filter
+- [ ] Find a backend that can read and write calendar events (Termux:API has none)
+- [ ] Read events with a date range filter
 - [ ] Implement `create_event` with title, start/end time, and optional description
 - [ ] Implement `update_event` by event ID using Termux calendar API
 - [ ] Implement `delete_event` with confirmation of successful removal

@@ -62,10 +62,11 @@ being optional. See [`security.md`](security.md).
 a supervisor can probe it without holding the key:
 
 ```json
-{"status":"ok","server":"mcp-filesystem","version":"dev"}
+{"status":"ok","server":"mcp-filesystem","version":"v0.4.0"}
 ```
 
-`version` is `dev` for local builds; release binaries report the git tag.
+`version` is the git tag for a release, the `git describe` of the checkout for
+`make build` (e.g. `v0.4.0-3-g1a2b3c4`), and `dev` for a plain `go build`.
 
 **Authentication.** When a key is configured, every request except `/healthz`
 must send it in the `X-DroidMCP-Key` header. The comparison is constant-time.
@@ -112,6 +113,15 @@ stream closes for SSE). Sensitive attribute keys (`token`, `secret`, `password`,
 `api_key`, `authorization`, `key`) are replaced with `[REDACTED]`, and the
 `X-DroidMCP-Key` header is never logged.
 
+**DNS on Android.** Android has no `/etc/resolv.conf`, which is where a Go
+binary built without cgo — every release binary — looks for DNS servers. When
+it is missing, the servers use the nameservers in Termux's
+`$PREFIX/etc/resolv.conf` and log `DNS: no /etc/resolv.conf, using Termux's
+nameservers` at startup. Those are public resolvers, not your network's, so a
+LAN name such as `desktop.lan` does not resolve: use its IP address (for example
+in `DROIDMCP_OLLAMA_HOST`), or list your router in that file. A binary built in
+Termux with cgo uses Android's own resolver instead.
+
 ---
 
 ## Quick start
@@ -138,7 +148,7 @@ Confirm it is alive from a second shell:
 
 ```bash
 curl -fsS http://localhost:3000/healthz
-# {"status":"ok","server":"mcp-filesystem","version":"dev"}
+# {"status":"ok","server":"mcp-filesystem","version":"v0.4.0"}
 ```
 
 Then point an MCP client at `http://localhost:3000/mcp` with the key in the
@@ -456,7 +466,7 @@ agent can back off. `owner` and `repo` are required on every repo-scoped tool.
 
 | Tool | Required args | Optional args |
 |------|---------------|---------------|
-| `create_issue` | `owner`, `repo`, `title` | `body` |
+| `create_issue` | `owner`, `repo`, `title` | `body`, `labels` (array) |
 | `list_issues` | `owner`, `repo` | `state` (`open` default, `closed`, `all`), `per_page`, `page` |
 | `comment_issue` | `owner`, `repo`, `number`, `body` | — |
 | `close_issue` | `owner`, `repo`, `number` | `state_reason` (`completed` default, `not_planned`) |
@@ -1359,6 +1369,10 @@ shows the `next_run` (check the time zone), and `task_history` keeps the newest
 | A task fails with `cannot redirect output to …` | Scripts cannot write files with `>`/`>>`. Read the output with `task_history`, or allowlist a command such as `tee` and write through it. |
 | A cron task fires at the wrong hour | The server is using another time zone. `list_tasks` shows `time_zone`; set `DROIDMCP_AUTOMATION_TZ` (e.g. `America/Bogota`) and restart. |
 | Tasks do not run while the phone is idle | Android suspended Termux. Run `termux-wake-lock` (or start the server from Termux:Boot with a wake lock); runs that fell due while the server was down are skipped, not made up. |
+| A server dies with `SIGSYS: bad system call` on its first tool call | The binary was built for `GOOS=linux` (as the v0.3.0 releases were): Android's seccomp filter kills an app that makes a syscall `os/exec` uses. Use a newer release, or rebuild with `make build-arm64` (`GOOS=android`). |
+| Network calls fail with `lookup … on [::1]:53: … connection refused` | No DNS server was found: the binary predates v0.4.0, or Termux's `$PREFIX/etc/resolv.conf` is missing. Upgrade, or restore the file with `pkg reinstall resolv-conf`. |
+| A LAN hostname does not resolve (e.g. `DROIDMCP_OLLAMA_HOST=desktop.lan`) | On Android the servers ask the public resolvers in `$PREFIX/etc/resolv.conf` (see [DNS on Android](#how-the-servers-work)). Use the host's IP address, or put your router in that file. |
+| `scan_network` errors `could not detect the local subnet` | Android 11+ hides network interfaces from apps, and the Wi-Fi fallback needs `termux-api` and a Wi-Fi connection. Install it, connect, or pass `subnet` explicitly. |
 | Can't reach a server from another machine | By design: the listener is bound to `127.0.0.1`. Front it with a reverse proxy or port-forward, and read [`security.md`](security.md) before exposing it. |
 
 For anything security-related — exposure, keys, TLS, the full threat model —

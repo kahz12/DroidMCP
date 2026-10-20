@@ -52,16 +52,20 @@ similar error from the OS shell.
 
 ## Building the servers
 
+Prefer not to build? The release binaries run as they are — see the
+[README quick start](../README.md#quick-start).
+
 ```bash
 git clone https://github.com/kahz12/DroidMCP
 cd DroidMCP
 make build
 ```
 
-Binaries land in `bin/`. The same flags are used by CI, so a local
-build of the same commit is byte-identical to the released artifact.
-A `bin/SHA256SUMS` is produced alongside if you use
-`make checksums` or `./scripts/build-arm64.sh`.
+Binaries land in `bin/`. `make checksums` (or `./scripts/build-arm64.sh`)
+writes a `bin/SHA256SUMS` alongside. A Termux build is not byte-identical
+to a release: Termux's `golang` is patched and may be another version.
+To reproduce a release, run `./scripts/build-arm64.sh` with the upstream
+Go release CI uses ([details](security.md#verifying-a-release)).
 
 ## Configuring environment variables
 
@@ -106,7 +110,7 @@ Verify it is alive from another shell:
 
 ```bash
 curl -fsS http://localhost:3000/healthz
-# {"status":"ok","server":"mcp-filesystem","version":"dev"}
+# {"status":"ok","server":"mcp-filesystem","version":"v0.4.0"}
 ```
 
 (Health probes bypass auth by design — see [`security.md`](security.md).)

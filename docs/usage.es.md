@@ -66,11 +66,11 @@ ese momento la autenticación y el TLS dejan de ser opcionales. Ver
 autenticación, para que un supervisor pueda sondearlo sin conocer la key:
 
 ```json
-{"status":"ok","server":"mcp-filesystem","version":"dev"}
+{"status":"ok","server":"mcp-filesystem","version":"v0.4.0"}
 ```
 
-`version` es `dev` en builds locales; los binarios de release reportan el tag de
-git.
+`version` es el tag de git en un release, el `git describe` del checkout con
+`make build` (p. ej. `v0.4.0-3-g1a2b3c4`), y `dev` con un `go build` a secas.
 
 **Autenticación.** Cuando hay una key configurada, toda petición excepto
 `/healthz` debe enviarla en la cabecera `X-DroidMCP-Key`. La comparación es en
@@ -118,6 +118,15 @@ hasta que el stream se cierra, en el caso de SSE). Las claves de atributos
 sensibles (`token`, `secret`, `password`, `api_key`, `authorization`, `key`) se
 reemplazan por `[REDACTED]`, y la cabecera `X-DroidMCP-Key` nunca se registra.
 
+**DNS en Android.** Android no tiene `/etc/resolv.conf`, que es donde un binario
+de Go compilado sin cgo —todos los de release— busca los servidores DNS. Si
+falta, los servidores usan los de `$PREFIX/etc/resolv.conf` de Termux y lo
+registran al arrancar (`DNS: no /etc/resolv.conf, using Termux's nameservers`).
+Son resolvers públicos, no los de tu red, así que un nombre de la LAN como
+`desktop.lan` no resuelve: usa su IP (por ejemplo en `DROIDMCP_OLLAMA_HOST`) o
+pon tu router en ese archivo. Un binario compilado en Termux con cgo usa el
+resolver del propio Android.
+
 ---
 
 ## Inicio rápido
@@ -145,7 +154,7 @@ Confirma que está vivo desde una segunda shell:
 
 ```bash
 curl -fsS http://localhost:3000/healthz
-# {"status":"ok","server":"mcp-filesystem","version":"dev"}
+# {"status":"ok","server":"mcp-filesystem","version":"v0.4.0"}
 ```
 
 Luego apunta un cliente MCP a `http://localhost:3000/mcp` con la key en la
@@ -473,7 +482,7 @@ repositorio.
 
 | Tool | Args requeridos | Args opcionales |
 |------|-----------------|-----------------|
-| `create_issue` | `owner`, `repo`, `title` | `body` |
+| `create_issue` | `owner`, `repo`, `title` | `body`, `labels` (array) |
 | `list_issues` | `owner`, `repo` | `state` (`open` por defecto, `closed`, `all`), `per_page`, `page` |
 | `comment_issue` | `owner`, `repo`, `number`, `body` | — |
 | `close_issue` | `owner`, `repo`, `number` | `state_reason` (`completed` por defecto, `not_planned`) |
@@ -1411,6 +1420,10 @@ ejecuciones más recientes con su salida.
 | Una tarea falla con `cannot redirect output to …` | Los scripts no pueden escribir archivos con `>`/`>>`. Lee la salida con `task_history`, o añade a la allowlist un comando como `tee` y escribe a través de él. |
 | Una tarea cron se dispara a una hora equivocada | El servidor usa otra zona horaria. `list_tasks` muestra `time_zone`; define `DROIDMCP_AUTOMATION_TZ` (p. ej. `America/Bogota`) y reinicia. |
 | Las tareas no se ejecutan con el teléfono en reposo | Android suspendió Termux. Ejecuta `termux-wake-lock` (o arranca el servidor desde Termux:Boot con un wake lock); las ejecuciones que vencieron con el servidor apagado se saltan, no se recuperan. |
+| Un servidor muere con `SIGSYS: bad system call` en su primera llamada a una herramienta | El binario se compiló para `GOOS=linux` (como los releases v0.3.0): el filtro seccomp de Android mata a una app que hace una llamada al sistema que usa `os/exec`. Usa un release más nuevo, o recompila con `make build-arm64` (`GOOS=android`). |
+| Las llamadas de red fallan con `lookup … on [::1]:53: … connection refused` | No se encontró ningún servidor DNS: el binario es anterior a v0.4.0, o falta `$PREFIX/etc/resolv.conf` de Termux. Actualiza, o recupera el archivo con `pkg reinstall resolv-conf`. |
+| Un nombre de la LAN no resuelve (p. ej. `DROIDMCP_OLLAMA_HOST=desktop.lan`) | En Android los servidores preguntan a los resolvers públicos de `$PREFIX/etc/resolv.conf` (ver [DNS en Android](#cómo-funcionan-los-servidores)). Usa la IP del host, o pon tu router en ese archivo. |
+| `scan_network` da `could not detect the local subnet` | Android 11+ oculta las interfaces de red a las apps, y el plan B del Wi-Fi necesita `termux-api` y una conexión Wi-Fi. Instálalo, conéctate o pasa `subnet` explícitamente. |
 | No puedes alcanzar un servidor desde otra máquina | Es por diseño: el listener está enlazado a `127.0.0.1`. Ponle delante un proxy inverso o un reenvío de puertos, y lee [`security.md`](security.md) antes de exponerlo. |
 
 Para cualquier cosa relacionada con seguridad — exposición, keys, TLS, el modelo

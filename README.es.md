@@ -23,7 +23,7 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 
 | Cero dependencias | Seguro por defecto | Catorce servidores enfocados |
 |:---|:---|:---|
-| Un binario ARM64 estático por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios, SQLite, sensores del dispositivo, notificaciones, contactos, SMS, LLMs en el dispositivo y tareas programadas — cada uno tras una superficie de tools pequeña y auditable. |
+| Un binario ARM64 autocontenido por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios, SQLite, sensores del dispositivo, notificaciones, contactos, SMS, LLMs en el dispositivo y tareas programadas — cada uno tras una superficie de tools pequeña y auditable. |
 
 ```
    Claude Code · Gemini CLI · cualquier cliente MCP
@@ -138,6 +138,10 @@ tool, con argumentos y ejemplos, está en la [guía de uso](docs/usage.es.md).
 <details>
 <summary><b>mcp-network</b> — descubrimiento de LAN mediante sondas TCP concurrentes</summary>
 <br>
+
+Android 11+ oculta las interfaces de red a las apps, así que ahí la subred a
+escanear es la `/24` alrededor de la IP del Wi-Fi (leída con `termux-api`) y
+`network_info` informa poco más que los servidores DNS.
 
 | Tool | Descripción |
 |------|-------------|
@@ -354,6 +358,10 @@ make build                           # bin/droidmcp-<servidor>, uno por servidor
 make install                         # opcional: copia a $PREFIX/bin
 ```
 
+Desde un PC, `make build-arm64` compila de forma cruzada para `android/arm64`.
+Compila para `GOOS=android`, no `linux`: Android mata un binario `linux` la
+primera vez que ejecuta un comando.
+
 **Ejecutar** — exporta los requisitos del servidor y arranca el binario; el
 endpoint MCP es `http://localhost:<puerto>/mcp` (Streamable HTTP), y el
 transporte SSE heredado sigue en `/sse`:
@@ -467,7 +475,8 @@ cmd/<servidor>/     un paquete main por servidor (filesystem, github, scraper,
                     notifications, contacts, sms, llmproxy, automation)
 internal/           core — servidor compartido (Streamable HTTP · SSE · stdio) ·
                     config · logger · pathsec (confinamiento en la raíz) ·
-                    phone (destinatarios de SMS) · buildinfo
+                    phone (destinatarios de SMS) · dnsconf (DNS en Android) ·
+                    buildinfo
 docs/               guía de uso (EN/ES) · seguridad · puesta a punto de Termux
 scripts/            compilación cruzada ARM64 reproducible
 ```
