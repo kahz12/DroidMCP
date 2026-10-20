@@ -3,7 +3,7 @@
 Notable changes to DroidMCP. Versions follow the git tags; each tagged release
 ships one ARM64 binary per server plus a cosign-signed `SHA256SUMS`.
 
-## [0.4.0] — Unreleased
+## [0.4.0] — 2026-10-20
 
 ### Added
 
