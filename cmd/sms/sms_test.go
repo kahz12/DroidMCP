@@ -204,21 +204,6 @@ func TestSendSMSNonZeroExit(t *testing.T) {
 	}
 }
 
-func TestParseRecipients(t *testing.T) {
-	joined, nums, err := parseRecipients("+1555, 800900 ,+1555")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if joined != "+1555,800900,+1555" || len(nums) != 3 {
-		t.Errorf("got %q %v", joined, nums)
-	}
-	for _, bad := range []string{"", "  ", "ab", "12", "+", "1 2 3"} {
-		if _, _, err := parseRecipients(bad); err == nil {
-			t.Errorf("%q should be rejected", bad)
-		}
-	}
-}
-
 func TestNormalizeNumber(t *testing.T) {
 	cases := map[string]string{
 		"+1 (555) 123-4567": "+15551234567",

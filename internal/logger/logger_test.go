@@ -42,7 +42,7 @@ func TestIsSensitiveKey(t *testing.T) {
 		"key", "primary_key", "Primary-Key",
 	}
 	for _, k := range positive {
-		if !isSensitiveKey(k) {
+		if !IsSensitiveKey(k) {
 			t.Errorf("expected sensitive: %q", k)
 		}
 	}
@@ -58,7 +58,7 @@ func TestIsSensitiveKey(t *testing.T) {
 		"monkey", "keyboard", "keep", "turkey", "hockey",
 	}
 	for _, k := range negative {
-		if isSensitiveKey(k) {
+		if IsSensitiveKey(k) {
 			t.Errorf("expected NOT sensitive: %q", k)
 		}
 	}
@@ -81,8 +81,8 @@ func TestRedactionTextHandler(t *testing.T) {
 	if strings.Contains(out, "shhh") {
 		t.Errorf("client_secret value leaked: %s", out)
 	}
-	if !strings.Contains(out, redactedMarker) {
-		t.Errorf("expected %q marker, got: %s", redactedMarker, out)
+	if !strings.Contains(out, RedactedMarker) {
+		t.Errorf("expected %q marker, got: %s", RedactedMarker, out)
 	}
 	if !strings.Contains(out, "alice") {
 		t.Errorf("non-sensitive attr should pass through, got: %s", out)
@@ -103,7 +103,7 @@ func TestRedactionJSONHandler(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
 		t.Fatalf("not JSON: %v\n%s", err, buf.String())
 	}
-	if entry["api_key"] != redactedMarker {
+	if entry["api_key"] != RedactedMarker {
 		t.Errorf("api_key not redacted: %+v", entry)
 	}
 	if entry["user"] != "alice" {

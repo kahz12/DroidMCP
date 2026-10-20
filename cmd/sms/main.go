@@ -23,6 +23,7 @@ import (
 	"github.com/kahz12/droidmcp/internal/config"
 	"github.com/kahz12/droidmcp/internal/core"
 	"github.com/kahz12/droidmcp/internal/logger"
+	"github.com/kahz12/droidmcp/internal/phone"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -30,7 +31,7 @@ var cfg *config.Config
 
 func main() {
 	var err error
-	cfg, err = config.LoadConfig()
+	cfg, err = config.LoadConfig("sms")
 	if err != nil {
 		logger.Fatal("Failed to load config", err)
 	}
@@ -38,19 +39,25 @@ func main() {
 	// Reading SMS exposes OTP/2FA codes and send_sms dispatches real,
 	// billable messages, so there is no dev mode: refuse to start unkeyed.
 	apiKey := config.ResolveAPIKey("sms")
-	if apiKey == "" {
+	// Over stdio there is no listener, so only the launching process can reach it.
+	if apiKey == "" && !cfg.Stdio() {
 		logger.Log.Error("mcp-sms requires DROIDMCP_SMS_KEY or DROIDMCP_API_KEY to be set. Refusing to start (it reads OTP/2FA messages and can send real SMS).")
 		os.Exit(1)
 	}
 
 	server := core.NewDroidServer("mcp-sms", buildinfo.Version)
 	server.APIKey = apiKey
+	server.DefaultRateLimits = defaultRateLimits
 	registerTools(server)
 
-	if err := server.ServeSSE(cfg.Port); err != nil {
+	if err := server.Serve(cfg); err != nil {
 		logger.Fatal("Server failed", err)
 	}
 }
+
+// defaultRateLimits caps send_sms unless DROIDMCP_SMS_RATE_LIMITS says
+// otherwise; reading messages is not limited.
+var defaultRateLimits = map[string]config.RateLimit{"send_sms": phone.SendLimit}
 
 func registerTools(s *core.DroidServer) {
 	s.MCPServer.AddTool(mcp.NewTool("list_sms",

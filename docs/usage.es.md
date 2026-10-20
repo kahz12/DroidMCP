@@ -38,9 +38,13 @@ de producción, ver [`security.md`](security.md). Versión en inglés:
 
 ## Cómo funcionan los servidores
 
-Cada binario de DroidMCP es un servidor MCP que habla el Model Context Protocol
-sobre HTTP con Server-Sent Events (SSE). Todos comparten el mismo núcleo, así que
-el comportamiento operativo descrito aquí es idéntico en todos ellos.
+Cada binario de DroidMCP es un servidor MCP. Por defecto habla el Model Context
+Protocol sobre HTTP — Streamable HTTP en `/mcp`, más el transporte HTTP+SSE
+anterior en `/sse` para los clientes que aún no se han actualizado — y con
+`DROIDMCP_TRANSPORT=stdio` lo habla por stdin/stdout (ver
+[Hablar con un servidor](#hablar-con-un-servidor)). Todos comparten el mismo
+núcleo, así que el comportamiento operativo descrito aquí es idéntico en todos
+ellos.
 
 **Listener solo en loopback.** El listener siempre se enlaza a
 `127.0.0.1:<puerto>` — nunca a `0.0.0.0`. Por tanto, un servidor es inalcanzable
@@ -49,11 +53,12 @@ poner un proxy inverso (o un reenvío de puertos por SSH / `adb`) delante, y en
 ese momento la autenticación y el TLS dejan de ser opcionales. Ver
 [`security.md`](security.md).
 
-**Endpoints.** Cada servidor expone tres rutas:
+**Endpoints.** Cada servidor expone estas rutas en su listener HTTP:
 
 | Ruta | Auth | Propósito |
 |------|------|-----------|
-| `GET /sse` | requerida si hay key | Abre el stream SSE de larga duración. El servidor responde con un evento `endpoint` que indica al cliente a dónde enviar los mensajes. |
+| `POST /mcp` | requerida si hay key | Streamable HTTP. Transporta todos los mensajes JSON-RPC; la respuesta vuelve en la misma respuesta HTTP. La respuesta a `initialize` fija una cabecera `Mcp-Session-Id` que el cliente reenvía en las peticiones siguientes. `GET /mcp` abre un stream opcional para mensajes iniciados por el servidor y `DELETE /mcp` cierra la sesión. |
+| `GET /sse` | requerida si hay key | Transporte SSE heredado. Abre el stream SSE de larga duración. El servidor responde con un evento `endpoint` que indica al cliente a dónde enviar los mensajes. |
 | `POST /message` | requerida si hay key | Transporta las llamadas JSON-RPC de una sesión establecida. El cliente aprende la URL exacta del evento `endpoint`. |
 | `GET /healthz` | nunca | Sonda de salud. Siempre `200`, siempre sin autenticación. |
 
@@ -75,13 +80,26 @@ tiempo constante. La key se resuelve por servidor: primero se comprueba
 **modo dev** — aceptan todas las peticiones y registran `auth=disabled` al
 arrancar. `mcp-filesystem`, `mcp-termux`, `mcp-media`, `mcp-sqlite`, `mcp-github`,
 `mcp-sms` y `mcp-automation` no tienen modo dev: se niegan a arrancar sin key.
+Por stdio no hay listener que proteger — solo el proceso que lanzó el servidor
+puede hablar con él —, así que ahí no se necesita ni se comprueba ninguna key,
+en ningún servidor.
 
 **Enlace de Host.** El listener se enlaza a `127.0.0.1`, y la cabecera `Host` de
 cada petición debe nombrar un destino loopback (`localhost`, `127.0.0.1`, `::1`)
 o un hostname en `DROIDMCP_ALLOWED_HOSTS`. Cualquier otro valor recibe `403`, de
 modo que una web maliciosa no puede alcanzar un servidor en modo dev vía DNS
-rebinding. Define `DROIDMCP_ALLOWED_HOSTS` (separado por comas, sin puerto) cuando
+rebinding. Cuando un navegador envía una cabecera `Origin`, debe pasar la misma
+comprobación (los clientes MCP fuera de un navegador no la envían). Define `DROIDMCP_ALLOWED_HOSTS` (separado por comas, sin puerto) cuando
 un proxy inverso o un reenvío de puertos exponga el servidor bajo otro hostname.
+
+**Límites de frecuencia.** `DROIDMCP_<SERVER>_RATE_LIMITS` limita cuántas veces
+se puede llamar a cada tool — o, con `*`, al servidor entero —, en cualquier
+transporte. Una llamada por encima del límite no se ejecuta; devuelve un
+resultado de error como `rate limit: "send_sms" allows 10 calls per hour; retry
+in 41m12s`, para que un agente pueda esperar en vez de insistir en bucle. Los
+únicos límites incorporados son los de las tools que envían SMS (`send_sms`,
+`termux_sms_send`: 10 por hora), porque esos mensajes se cobran y no se pueden
+recuperar. Cuenta toda llamada que llega a la tool, tenga éxito o no.
 
 **TLS.** Define `DROIDMCP_TLS_CERT` y `DROIDMCP_TLS_KEY` apuntando a archivos PEM
 y el servidor sirve HTTPS y añade una cabecera HSTS. Si solo defines una de las
@@ -130,15 +148,16 @@ curl -fsS http://localhost:3000/healthz
 # {"status":"ok","server":"mcp-filesystem","version":"dev"}
 ```
 
-Luego apunta un cliente MCP a `http://localhost:3000/sse` con la key en la
+Luego apunta un cliente MCP a `http://localhost:3000/mcp` con la key en la
 cabecera `X-DroidMCP-Key` (ver [Hablar con un servidor](#hablar-con-un-servidor)).
 
-**Ejecutar varios a la vez.** Cada servidor necesita su propio puerto. En Termux,
-`tmux` da a cada servidor un panel, y `Termux:Boot` puede exportar las variables
-y ejecutar los binarios al arrancar el dispositivo. Una convención coherente con
-el resto de la documentación:
+**Ejecutar varios a la vez.** Cada servidor tiene su propio puerto por defecto,
+así que pueden correr a la vez sin definir `DROIDMCP_PORT`; defínelo solo para
+mover alguno. En Termux, `tmux` da a cada servidor un panel, y `Termux:Boot`
+puede exportar las variables y ejecutar los binarios al arrancar el dispositivo.
+Los puertos por defecto:
 
-| Servidor | Puerto sugerido | Binario |
+| Servidor | Puerto por defecto | Binario |
 |----------|:---:|---------|
 | filesystem | `3000` | `droidmcp-filesystem` |
 | github | `3001` | `droidmcp-github` |
@@ -166,8 +185,11 @@ lanzar el binario.
 
 | Variable | Por defecto | Notas |
 |----------|-------------|-------|
-| `DROIDMCP_PORT` | `3000` | Puerto TCP del listener SSE. Debe estar en `1`–`65535` o el servidor no arranca. |
-| `DROIDMCP_API_KEY` | sin definir | Key global requerida en `X-DroidMCP-Key`. Sin definir = modo dev (excepto filesystem/termux/media/sqlite/github/sms/automation). |
+| `DROIDMCP_TRANSPORT` | `http` | `http`: Streamable HTTP en `/mcp` y SSE heredado en `/sse` sobre un único listener loopback. `stdio`: MCP por stdin/stdout con el proceso que lanzó el servidor — sin listener, así que puerto, TLS y key no se usan. Cualquier otro valor detiene el servidor al arrancar. |
+| `DROIDMCP_PORT` | uno por servidor, `3000`–`3013` ([tabla](#inicio-rápido)) | Puerto TCP del listener HTTP (no se usa con stdio). Debe estar en `1`–`65535` o el servidor no arranca. |
+| `DROIDMCP_<SERVER>_RATE_LIMITS` | por servidor (solo el envío de SMS tiene uno: `10/h`) | Topes `tool=N/unidad` separados por comas sobre las llamadas a tools, con unidad `s`, `m`, `h` o `d`; `*` limita todas las llamadas al servidor; `off` quita un límite incorporado. P. ej. `DROIDMCP_SMS_RATE_LIMITS=send_sms=3/h,*=120/m`. Ventana deslizante: nunca más de N llamadas en cualquier periodo. Vale en todos los transportes. Un nombre de tool desconocido o una sintaxis inválida detienen el servidor al arrancar. |
+| `DROIDMCP_<SERVER>_DISABLED_TOOLS` | sin definir | Tools a desactivar, separadas por comas, p. ej. `DROIDMCP_TERMUX_DISABLED_TOOLS=run_command,termux_sms_send`. Se quitan antes de arrancar: los clientes no las ven ni pueden llamarlas. Un nombre desconocido detiene el servidor al arrancar (y lista los válidos), así un error de tipeo no deja una tool activa. `<SERVER>` es el mismo nombre que en `DROIDMCP_<SERVER>_KEY`. |
+| `DROIDMCP_API_KEY` | sin definir | Key global requerida en `X-DroidMCP-Key`. Sin definir = modo dev (excepto filesystem/termux/media/sqlite/github/sms/automation, que por HTTP se niegan a arrancar sin ella). No se usa por stdio. |
 | `DROIDMCP_<SERVER>_KEY` | sin definir | Override por servidor, p. ej. `DROIDMCP_GITHUB_KEY`. Prevalece sobre la global. |
 | `DROIDMCP_ALLOWED_HOSTS` | sin definir | Valores de `Host` aceptados además de loopback (separados por comas, sin puerto). Para front-ends con proxy inverso / reenvío de puertos. |
 | `DROIDMCP_TLS_CERT` | sin definir | Ruta al certificado PEM. Cert y key deben estar ambos definidos para habilitar HTTPS + HSTS. |
@@ -188,7 +210,7 @@ lanzar el binario.
 | `DROIDMCP_GITHUB_KEY` | github | sin definir | Requerida (esta o `DROIDMCP_API_KEY`); sin modo dev — el token da acceso completo a la API de GitHub. |
 | `DROIDMCP_SCRAPER_ALLOW_PRIVATE` | scraper | desactivado | Ponlo a `1` para permitir objetivos loopback / RFC1918 / link-local / CGNAT. Desactivado por defecto por seguridad SSRF. |
 | `DROIDMCP_TERMUX_KEY` | termux | sin definir | Requerida (esta o `DROIDMCP_API_KEY`); sin modo dev. |
-| `DROIDMCP_TERMUX_ALLOWLIST` | termux | vacía (permitir todo) | Lista blanca separada por comas para `run_command`. Coincide con el comando completo o su basename. |
+| `DROIDMCP_TERMUX_ALLOWLIST` | termux | ninguna (obligatoria) | Programas que `run_command` puede lanzar, separados por comas; coincide con el comando completo o su basename. El servidor no arranca sin ella; `*` (sola) permite explícitamente cualquier programa y registra un aviso. No hace falta si `run_command` está en `DROIDMCP_TERMUX_DISABLED_TOOLS`. |
 | `DROIDMCP_NETWORK_ALLOW_PUBLIC` | network | desactivado | Ponlo a `1` para permitir objetivos no privados en scan/`check_ports`. Desactivado por defecto. |
 | `DROIDMCP_NETWORK_DB` | network | `~/.droidmcp/network-devices.json` | Ruta al JSON del inventario persistente de dispositivos. |
 | `DROIDMCP_CLIPBOARD_HISTORY_ENTRIES` | clipboard | `32` | Máximo de entradas del historial. Acotado a `1`–`1024`. |
@@ -216,44 +238,103 @@ tarde.
 
 ## Hablar con un servidor
 
-DroidMCP implementa el transporte SSE de MCP, así que el camino cómodo es usar un
-cliente que entienda MCP y dejar que gestione la sesión. Dos ejemplos:
+Deja que un cliente que entienda MCP gestione la sesión. Cada servidor ofrece tres
+transportes; usa el primero que soporte tu cliente:
 
-**Claude Code** — añadir a `~/.claude/settings.json`:
+| Transporte | Cómo llegar | Notas |
+|------------|-------------|-------|
+| Streamable HTTP | `http://localhost:<puerto>/mcp` | El transporte MCP actual, soportado por Claude Code y Gemini CLI. |
+| SSE (heredado) | `http://localhost:<puerto>/sse` | Para clientes que solo hablan el transporte HTTP+SSE anterior. Mismo listener, misma key. |
+| stdio | el cliente lanza el binario con `DROIDMCP_TRANSPORT=stdio` | Para un cliente que corre en el propio dispositivo (Claude Code o Gemini CLI dentro de Termux). Sin puerto, sin key, nada que mantener corriendo: el servidor vive lo que dura la sesión del cliente. Esto último importa en `mcp-automation` — sus tareas solo se disparan mientras el cliente está abierto, así que córrelo por HTTP para mantener las programaciones. |
 
-```jsonc
+**Claude Code** — registra el servidor con la CLI. `--scope user` lo deja
+disponible en todos los proyectos (se guarda en `~/.claude.json`):
+
+```bash
+claude mcp add --transport http --scope user filesystem http://localhost:3000/mcp \
+  --header "X-DroidMCP-Key: $DROIDMCP_API_KEY"
+```
+
+Para compartir la entrada con un proyecto, versiona un `.mcp.json` en su raíz.
+Claude Code expande `${VAR}` dentro, así la key no queda escrita en el archivo:
+
+```json
 {
   "mcpServers": {
     "filesystem": {
-      "type": "sse",
-      "url": "http://localhost:3000/sse",
+      "type": "http",
+      "url": "http://localhost:3000/mcp",
+      "headers": { "X-DroidMCP-Key": "${DROIDMCP_API_KEY}" }
+    }
+  }
+}
+```
+
+Por stdio, Claude Code arranca el binario por su cuenta:
+
+```bash
+claude mcp add --env DROIDMCP_TRANSPORT=stdio --env DROIDMCP_ROOT="$HOME/workspace" \
+  --transport stdio --scope user filesystem -- droidmcp-filesystem
+```
+
+Deja una opción como `--transport` entre el último `--env` y el nombre del
+servidor; si no, la CLI lee el nombre como otro par `KEY=valor`.
+
+**Gemini CLI** — `~/.gemini/settings.json` (o `.gemini/settings.json` en un
+proyecto). Streamable HTTP va en `httpUrl`; el endpoint SSE heredado iría en
+`url`:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "httpUrl": "http://localhost:3000/mcp",
       "headers": { "X-DroidMCP-Key": "<pega-la-key>" }
     }
   }
 }
 ```
 
-**Gemini CLI** — mismo endpoint, `uri` en lugar de `url`:
+Lo mismo desde la CLI:
+`gemini mcp add --transport http --header "X-DroidMCP-Key: $DROIDMCP_API_KEY" filesystem http://localhost:3000/mcp`.
 
-```jsonc
+Por stdio:
+
+```json
 {
   "mcpServers": {
     "filesystem": {
-      "uri": "http://localhost:3000/sse",
-      "headers": { "X-DroidMCP-Key": "<pega-la-key>" }
+      "command": "droidmcp-filesystem",
+      "env": {
+        "DROIDMCP_TRANSPORT": "stdio",
+        "DROIDMCP_ROOT": "$HOME/workspace"
+      }
     }
   }
 }
 ```
+
+Gemini CLI quita del entorno que pasa a los servidores stdio las variables cuyo
+nombre contiene `KEY`, `TOKEN`, `SECRET` y similares. Lista en `env` todo lo que
+necesite el servidor — para `mcp-github`, `"GITHUB_TOKEN": "$GITHUB_TOKEN"` (los
+valores de `env` se expanden desde tu shell).
 
 Cambia el esquema a `https://` una vez que el TLS esté configurado.
 
-**Inspección manual.** El handshake de sesión (abrir `/sse`, leer el evento
-`endpoint`, enviar una petición `initialize` y luego mensajes `tools/call`) es
-tedioso de conducir con `curl`. Usa el
-[MCP Inspector](https://github.com/modelcontextprotocol/inspector) o cualquier
-cliente MCP para pruebas interactivas. El único endpoint que vale la pena sondear
-directamente con `curl` es el health check sin autenticación:
+**Inspección manual.** Streamable HTTP es petición/respuesta normal, así que
+`curl` puede conducir una sesión. Envía `initialize`, guarda el `Mcp-Session-Id`
+que fija la respuesta y reenvíalo en cada llamada:
+
+```bash
+H=(-H "X-DroidMCP-Key: $DROIDMCP_API_KEY" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream')
+curl -sD - "${H[@]}" http://localhost:3000/mcp \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
+curl -s "${H[@]}" -H "Mcp-Session-Id: <de-la-respuesta>" http://localhost:3000/mcp \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+```
+
+Para algo interactivo, el [MCP Inspector](https://github.com/modelcontextprotocol/inspector)
+es más cómodo. El health check no necesita key:
 
 ```bash
 curl -fsS http://localhost:3000/healthz
@@ -426,7 +507,7 @@ en la API de GitHub).
 
 ### mcp-scraper
 
-Scraping sin Chromium sobre `colly` + `goquery`. **La protección SSRF está
+Scraping sin Chromium sobre `net/http` + `goquery`. **La protección SSRF está
 activada por defecto**: los objetivos que resuelven a loopback, RFC1918, ULA
 IPv6, link-local, multicast o rangos CGNAT se rechazan salvo que
 `DROIDMCP_SCRAPER_ALLOW_PRIVATE=1`. Las respuestas se cachean en un LRU en memoria
@@ -479,12 +560,14 @@ cada stream de salida se limita a 1 MiB.
 | `env_extra` | object | no | — | Variables de entorno extra sobre el entorno padre. Los overrides del linker dinámico (`LD_*`, `DYLD_*`) se rechazan — podrían burlar la allowlist. |
 | `timeout_seconds` | number | no | `30` | Timeout por llamada. Máx `300`. |
 
-Cuando `DROIDMCP_TERMUX_ALLOWLIST` está definida, `command` debe coincidir con una
-de sus entradas separadas por comas (por valor completo o basename) o la llamada
-se rechaza. Una allowlist vacía/sin definir permite cualquier comando. Ten en
-cuenta que la allowlist es un control grueso: un intérprete permitido (`sh`,
-`python`, …) puede ejecutar otro código, así que trátala como reducción del radio
-de impacto, no como un sandbox estricto.
+`command` debe coincidir con una de las entradas separadas por comas de
+`DROIDMCP_TERMUX_ALLOWLIST` (por valor completo o basename) o la llamada se
+rechaza. La variable es obligatoria: el servidor no arranca sin ella, y permitir
+todo exige un `*` explícito. Ten en cuenta que la allowlist es un control grueso:
+un intérprete permitido (`sh`, `python`, …) puede ejecutar otro código, así que
+trátala como reducción del radio de impacto, no como un sandbox estricto. Si solo
+quieres los envoltorios de Termux:API de abajo, desactiva `run_command` con
+`DROIDMCP_TERMUX_DISABLED_TOOLS=run_command` y no hace falta allowlist.
 
 **`install_pkg`** — instala un paquete vía `pkg install -y`.
 
@@ -496,7 +579,11 @@ de impacto, no como un sandbox estricto.
 **`list_pkgs`** — lista los paquetes instalados. Sin argumentos.
 
 **`read_env`** — lee variables de entorno. Devuelve `{name, value}` para una
-variable nombrada, o `{vars: {...}}` cuando se omite `name`.
+variable nombrada, o `{vars: {...}}` cuando se omite `name`. Los valores de las
+variables cuyo nombre parece una credencial — con `TOKEN`, `SECRET`, `PASSWORD`,
+`API_KEY` o `KEY` como palabra, como `GITHUB_TOKEN` o `DROIDMCP_TERMUX_KEY` —
+vuelven como `[REDACTED]` y sus nombres se listan en `redacted`, para que un
+modelo con prompt injection no pueda leer los secretos del propio servidor.
 
 | Argumento | Tipo | Requerido | Descripción |
 |-----------|------|:---:|-------------|
@@ -509,7 +596,10 @@ variable nombrada, o `{vars: {...}}` cuando se omite `name`.
 |-----------|------|:---:|-------------|
 | `path` | string | no | Inspecciona esta ruta en lugar del conjunto por defecto. |
 
-**Envoltorios de Termux:API** (necesitan `termux-api`):
+**Envoltorios de Termux:API** (necesitan `termux-api`). Ejecutan comandos fijos,
+no elegidos por quien llama, así que corren sin estar en la allowlist; desactiva
+los que no quieras con `DROIDMCP_TERMUX_DISABLED_TOOLS` (también `install_pkg` y
+`list_pkgs`):
 
 | Tool | Args requeridos | Args opcionales |
 |------|-----------------|-----------------|
@@ -517,7 +607,7 @@ variable nombrada, o `{vars: {...}}` cuando se omite `name`.
 | `termux_location` | — | `provider` (`gps` por defecto, `network`, `passive`), `request` (`once` por defecto, `last`, `updates`), `timeout_seconds` |
 | `termux_notification` | — | `title`, `content`, `id` (reutilízalo para reemplazar una notificación previa) |
 | `termux_toast` | `text` | — |
-| `termux_sms_send` | `number`, `text` | — (requiere permiso de SMS concedido a Termux:API) |
+| `termux_sms_send` | `number` (dígitos con `+` opcional, separados por comas), `text` | — (requiere permiso de SMS concedido a Termux:API). Envía un mensaje real; se valida igual que `send_sms` de `mcp-sms`, con el cuerpo por stdin, y está limitado por defecto a 10 por hora (`DROIDMCP_TERMUX_RATE_LIMITS`). |
 | `termux_tts_speak` | `text` | `language` (BCP47, p. ej. `en-US`), `rate` (`1.0` = normal), `pitch` (`1.0` = normal) |
 
 ### mcp-network
@@ -990,7 +1080,8 @@ opcional — cualquier otra cosa se rechaza); `text` es el cuerpo, entregado al
 comando por **stdin**, nunca como argumento, así que el contenido del mensaje no
 puede interpretarse como opción ni llegar a un shell. Devuelve
 `{sent, recipients, sim_slot}`. Requiere el permiso `SEND_SMS` concedido a
-Termux:API.
+Termux:API. Limitado por defecto a 10 llamadas por hora; cámbialo con
+`DROIDMCP_SMS_RATE_LIMITS=send_sms=N/h`, o `=off`.
 
 | Argumento | Tipo | Requerido | Defecto | Descripción |
 |-----------|------|:---:|---------|-------------|
@@ -1296,7 +1387,12 @@ ejecuciones más recientes con su salida.
 | Una tool de network devuelve `not in a private network range` | El objetivo es público y `DROIDMCP_NETWORK_ALLOW_PUBLIC` está desactivado. Ponlo a `1` para permitir objetivos públicos. |
 | `read_file` da error `file exceeds max read size` | El archivo es mayor que `DROIDMCP_MAX_READ_BYTES`. Paginado con `offset`/`length`, o sube el tope. |
 | Los envoltorios de clipboard/termux fallan con una pista «termux-api not installed» | Instala `pkg install termux-api` y la app Termux:API, y concede sus permisos. |
-| `run_command` dice que un comando `not in DROIDMCP_TERMUX_ALLOWLIST` | La allowlist está definida y no incluye ese comando. Añádelo, o vacía la variable para permitir todo. |
+| `run_command` dice que un comando `not in DROIDMCP_TERMUX_ALLOWLIST` | La allowlist no incluye ese comando. Añádelo, o pon la variable en `*` para permitir cualquier programa. |
+| `mcp-termux` sale y registra `DROIDMCP_TERMUX_ALLOWLIST is not set` | La allowlist es obligatoria. Lista los programas que `run_command` puede lanzar, ponla en `*`, o desactiva `run_command` con `DROIDMCP_TERMUX_DISABLED_TOOLS=run_command`. |
+| Una tool devuelve `rate limit: … retry in …` | La llamada alcanzó un tope de `DROIDMCP_<SERVER>_RATE_LIMITS`, o el 10/h incorporado del envío de SMS. Espera, o sube o quita el límite (`tool=N/unidad`, `tool=off`). |
+| El servidor sale y registra `…_RATE_LIMITS names unknown tool(s)` o `want N/s, N/m, N/h, N/d or off` | Un límite nombra una tool que el servidor no tiene, o está mal escrito. El log lista los nombres válidos. |
+| El servidor sale y registra `…_DISABLED_TOOLS names unknown tool(s)` | Un nombre de la lista de tools desactivadas no coincide con ninguna tool de ese servidor (suele ser un error de tipeo). El log lista los nombres válidos. |
+| Tras actualizar, un cliente sigue conectando al puerto `3000` | Desde v0.4.0 cada servidor tiene su propio puerto por defecto (ver [Ejecutar varios a la vez](#inicio-rápido)). Apunta el cliente al puerto nuevo o define `DROIDMCP_PORT`. |
 | Una transformación de `mcp-media` falla con una pista `ffmpeg not found` | `convert_image`/`thumbnail`/`extract_audio` necesitan ffmpeg. Ejecuta `pkg install ffmpeg`, o define `DROIDMCP_MEDIA_FFMPEG` con su ruta. |
 | `mcp-sqlite` devuelve `database … does not exist; call open_db first` | Solo `open_db` crea una base de datos; `query`/`execute`/etc. requieren un archivo existente. Llama a `open_db` (o corrige la ruta). |
 | `mcp-sqlite` `query` devuelve `query only runs read statements` | Se envió una sentencia de escritura a `query`. Usa `execute` para `INSERT`/`UPDATE`/`DELETE`/DDL. |

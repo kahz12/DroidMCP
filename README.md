@@ -21,14 +21,14 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
 
 ## At a glance
 
-| Zero dependencies | Secure by default | Thirteen focused servers |
+| Zero dependencies | Secure by default | Fourteen focused servers |
 |:---|:---|:---|
-| One static ARM64 binary per server, pure Go — no CGO, no interpreter, nothing else to install. | Loopback-only listener, API-key auth, optional TLS, sandboxed roots, redacted logs, signed releases. | Files, GitHub, web scraping, shell, LAN, clipboard, media, SQLite, device sensors, notifications, contacts, SMS, and on-device LLMs — each behind a small, auditable tool surface. |
+| One static ARM64 binary per server, pure Go — no CGO, no interpreter, nothing else to install. | Loopback-only listener, API-key auth, optional TLS, sandboxed roots, redacted logs, signed releases. | Files, GitHub, web scraping, shell, LAN, clipboard, media, SQLite, device sensors, notifications, contacts, SMS, on-device LLMs, and scheduled tasks — each behind a small, auditable tool surface. |
 
 ```
       Claude Code · Gemini CLI · any MCP client
                           │
-                          │  MCP protocol over HTTP/SSE
+                          │  MCP over Streamable HTTP · SSE · stdio
                           ▼
        ┌──────────────────────────────────────┐
        │      DroidMCP — Termux · ARM64       │
@@ -49,12 +49,12 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
 
 ## Servers
 
-| Server | Port | Focus | Requires |
+| Server | Default port | Focus | Requires |
 |--------|:---:|-------|----------|
 | `mcp-filesystem` | `3000` | Sandboxed file operations with path-traversal protection | `DROIDMCP_ROOT` + key |
 | `mcp-github` | `3001` | Full GitHub API via Personal Access Token | `GITHUB_TOKEN` + key |
 | `mcp-scraper` | `3002` | Chromium-free web scraping and extraction | — |
-| `mcp-termux` | `3003` | Shell execution and package management | key |
+| `mcp-termux` | `3003` | Shell execution and package management | allowlist + key |
 | `mcp-network` | `3004` | LAN discovery and port scanning | — |
 | `mcp-clipboard` | `3005` | Android clipboard bridge via Termux:API | `termux-api` |
 | `mcp-media` | `3006` | Media browsing and `ffmpeg`-based transforms | `DROIDMCP_ROOT` + key |
@@ -105,7 +105,7 @@ examples, lives in the [usage guide](docs/usage.md).
 </details>
 
 <details>
-<summary><b>mcp-scraper</b> — lightweight scraping on <code>colly</code> + <code>goquery</code>, no Chromium</summary>
+<summary><b>mcp-scraper</b> — lightweight scraping on <code>net/http</code> + <code>goquery</code>, no Chromium</summary>
 <br>
 
 | Tool | Description |
@@ -125,9 +125,9 @@ examples, lives in the [usage guide](docs/usage.md).
 
 | Tool | Description |
 |------|-------------|
-| `run_command` | Execute a shell command (allowlist-restrictable) |
+| `run_command` | Execute a program from the mandatory allowlist |
 | `install_pkg` · `list_pkgs` | Package management via `pkg` |
-| `read_env` | Read one or all environment variables |
+| `read_env` | Read one or all environment variables (credentials redacted) |
 | `get_storage` | Storage usage for home, prefix, and shared storage |
 | `termux_battery_status` · `termux_location` | Device status via Termux:API |
 | `termux_notification` · `termux_toast` | Show notifications and toasts |
@@ -271,7 +271,8 @@ permissions. Highest-privilege Termux:API server: reading messages exposes
 OTP/2FA codes and `send_sms` dispatches a **real, billable, irreversible**
 message — so it **refuses to start without a key** (`DROIDMCP_SMS_KEY` or
 `DROIDMCP_API_KEY`). `send_sms` validates recipients as phone numbers and passes
-the body on stdin, so message content never reaches a shell.
+the body on stdin, so message content never reaches a shell, and is limited to
+10 messages per hour unless `DROIDMCP_SMS_RATE_LIMITS` says otherwise.
 
 | Tool | Description |
 |------|-------------|
@@ -332,7 +333,7 @@ Android's own time zone.
 ## Quick start
 
 **From a release** — each release ships one binary per server plus a signed
-`SHA256SUMS` ([verification details](docs/security.md)):
+`SHA256SUMS` ([verification details](docs/security.md#verifying-a-release)):
 
 ```bash
 curl -LO https://github.com/kahz12/DroidMCP/releases/latest/download/droidmcp-filesystem
@@ -350,8 +351,9 @@ make build                           # bin/droidmcp-<server>, one per server
 make install                         # optional: copy into $PREFIX/bin
 ```
 
-**Run** — export the server's requirements and start the binary; the MCP stream
-is served at `http://localhost:<port>/sse`:
+**Run** — export the server's requirements and start the binary; the MCP
+endpoint is `http://localhost:<port>/mcp` (Streamable HTTP), with the legacy SSE
+transport still at `/sse`:
 
 ```bash
 export DROIDMCP_API_KEY="$(openssl rand -base64 32)"
@@ -362,7 +364,7 @@ DROIDMCP_PORT=3000 droidmcp-filesystem
 
 ```bash
 curl -fsS http://localhost:3000/healthz
-# {"status":"ok","server":"mcp-filesystem","version":"v0.2.0"}
+# {"status":"ok","server":"mcp-filesystem","version":"v0.4.0"}
 ```
 
 ## Configuration
@@ -372,7 +374,10 @@ servers:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DROIDMCP_PORT` | TCP port the SSE listener binds to | `3000` |
+| `DROIDMCP_TRANSPORT` | `http` (Streamable HTTP at `/mcp` + legacy SSE at `/sse`) or `stdio` (the client launches the binary; no port, no key) | `http` |
+| `DROIDMCP_PORT` | TCP port the HTTP listener binds to | per server ([table](#servers)) |
+| `DROIDMCP_<SERVER>_RATE_LIMITS` | Caps on tool calls, e.g. `DROIDMCP_SMS_RATE_LIMITS=send_sms=3/h,*=120/m`; `off` removes a built-in one | SMS sending: `10/h` |
+| `DROIDMCP_<SERVER>_DISABLED_TOOLS` | Tools to switch off, e.g. `DROIDMCP_TERMUX_DISABLED_TOOLS=termux_sms_send`; an unknown name stops the server | unset |
 | `DROIDMCP_ROOT` | Filesystem root, validated at startup — required by `filesystem`, `media`, `sqlite` | — |
 | `DROIDMCP_API_KEY` | Global key; if set, every request must carry `X-DroidMCP-Key` | unset |
 | `DROIDMCP_<SERVER>_KEY` | Per-server key, e.g. `DROIDMCP_TERMUX_KEY`; wins over the global key | unset |
@@ -389,41 +394,62 @@ time.
 
 ## Client integration
 
-**Claude Code** — `~/.claude/settings.json`:
+**Claude Code** — register the server with the CLI (`--scope user` stores it in
+`~/.claude.json` for every project):
+
+```bash
+claude mcp add --transport http --scope user filesystem http://localhost:3000/mcp \
+  --header "X-DroidMCP-Key: $DROIDMCP_API_KEY"
+```
+
+**Gemini CLI** — `~/.gemini/settings.json`:
 
 ```json
 {
   "mcpServers": {
     "filesystem": {
-      "type": "sse",
-      "url": "http://localhost:3000/sse",
+      "httpUrl": "http://localhost:3000/mcp",
       "headers": { "X-DroidMCP-Key": "<your-key>" }
     }
   }
 }
 ```
 
-**Gemini CLI** — same endpoint and header, with `uri` in place of `url`. Switch
-to `https://…` once TLS is configured.
+**Client on the device itself** (Claude Code or Gemini CLI in Termux) — skip the
+port and the key: with `DROIDMCP_TRANSPORT=stdio` the client launches the binary
+and talks to it over stdin/stdout.
+
+```bash
+claude mcp add --env DROIDMCP_TRANSPORT=stdio --env DROIDMCP_ROOT="$HOME/workspace" \
+  --transport stdio --scope user filesystem -- droidmcp-filesystem
+```
+
+Project-scoped `.mcp.json`, the Gemini stdio form, and the legacy SSE endpoint
+are covered in the [usage guide](docs/usage.md#talking-to-a-server). Switch to
+`https://…` once TLS is configured.
 
 ## Security
 
 The full threat model and production checklist live in
 [`docs/security.md`](docs/security.md). The short version:
 
-- **No dev mode for sensitive servers.** `filesystem`, `termux`, `media`, and
-  `sqlite` refuse to start without an explicit key — and the first three plus
-  `sqlite` also require `DROIDMCP_ROOT`, so an unconfigured server can never act
-  on `/` or run unauthenticated.
-- **Loopback by design.** Every listener binds `127.0.0.1`; exposure beyond the
-  device is an explicit decision that requires a key and TLS.
+- **No dev mode for sensitive servers.** `filesystem`, `termux`, `media`,
+  `sqlite`, `github`, `sms`, and `automation` refuse to listen without an
+  explicit key, and `filesystem`, `media`, and `sqlite` also require
+  `DROIDMCP_ROOT` — so an unconfigured server can never act on `/` or run
+  unauthenticated. Over stdio there is no listener, so no key is needed.
+- **Loopback by design.** Every listener binds `127.0.0.1` and checks the
+  `Host` and `Origin` headers against DNS rebinding; exposure beyond the device
+  is an explicit decision that requires a key and TLS.
 - **Sandboxed paths.** Absolute paths and `..` are rejected, symlinks are
   resolved and containment re-checked on every path the servers touch;
   `mcp-sqlite` additionally binds all SQL values as parameters.
 - **Conservative network defaults.** `mcp-scraper` blocks private/loopback
   targets (SSRF) and `mcp-network` blocks public ones; both are explicit opt-ins.
-- **`mcp-termux` is a remote shell.** Restrict it with
-  `DROIDMCP_TERMUX_ALLOWLIST`, give it a dedicated key, run it only when needed.
+- **`mcp-termux` is a remote shell.** It will not start without
+  `DROIDMCP_TERMUX_ALLOWLIST` (allowing everything takes an explicit `*`); give
+  it a dedicated key, switch off the tools you don't use with
+  `DROIDMCP_TERMUX_DISABLED_TOOLS`, and run it only when needed.
 - **Redacted logs, signed releases.** Secret-like attributes are replaced with
   `[REDACTED]`; releases ship `SHA256SUMS` with a cosign signature.
 
@@ -432,23 +458,27 @@ The full threat model and production checklist live in
 ```
 cmd/<server>/       one main package per server (filesystem, github, scraper,
                     termux, network, clipboard, media, sqlite, sensors,
-                    notifications, contacts, sms)
-internal/           core — shared HTTP/SSE server · config · logger · buildinfo
+                    notifications, contacts, sms, llmproxy, automation)
+internal/           core — shared server (Streamable HTTP · SSE · stdio) ·
+                    config · logger · pathsec (root containment) ·
+                    phone (SMS recipients) · buildinfo
 docs/               usage guide (EN/ES) · security · Termux setup
 scripts/            reproducible ARM64 cross-build
 ```
 
 Built with Go 1.26 on [mark3labs/mcp-go](https://github.com/mark3labs/mcp-go),
 [google/go-github](https://github.com/google/go-github),
-[gocolly/colly](https://github.com/gocolly/colly) +
 [goquery](https://github.com/PuerkitoBio/goquery),
-[modernc.org/sqlite](https://gitlab.com/cznic/sqlite), and
+[modernc.org/sqlite](https://gitlab.com/cznic/sqlite),
+[mvdan.cc/sh](https://github.com/mvdan/sh), and
 [spf13/viper](https://github.com/spf13/viper). CI enforces `gofmt`, `go vet`,
-`go test -race`, `golangci-lint`, and `gosec`; tagged releases are built
-reproducibly and signed.
+`go test -race`, `golangci-lint`, `gosec`, and `govulncheck`, and builds the
+ARM64 target on every change; tagged releases are built reproducibly and
+signed. Changes per release are in [CHANGELOG.md](CHANGELOG.md).
 
 Contributions are welcome — read [CONTRIBUTING.md](CONTRIBUTING.md) and check
-[ROADMAP.md](ROADMAP.md) for planned work.
+[ROADMAP.md](ROADMAP.md) for planned work. Report vulnerabilities privately, as
+described in [SECURITY.md](SECURITY.md).
 
 ## License
 

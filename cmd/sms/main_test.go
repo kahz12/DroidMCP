@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kahz12/droidmcp/internal/core"
+	"github.com/kahz12/droidmcp/internal/phone"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -159,5 +161,26 @@ func TestSafeUTF8AndCappedBuffer(t *testing.T) {
 	}
 	if string(cb.Bytes()) != "1234" || !cb.truncated {
 		t.Errorf("cap not enforced: %q truncated=%v", cb.Bytes(), cb.truncated)
+	}
+}
+
+// SMS sending is rate limited out of the box. The limit must name a tool this
+// server registers — core refuses to start on a built-in limit for a missing
+// tool, so a rename would otherwise surface only at startup — and use the
+// shared SMS policy.
+func TestDefaultRateLimitsCoverSMSSending(t *testing.T) {
+	s := core.NewDroidServer("mcp-sms", "test")
+	registerTools(s)
+	limit, ok := defaultRateLimits["send_sms"]
+	if !ok {
+		t.Fatal("send_sms must have a built-in rate limit")
+	}
+	if limit != phone.SendLimit {
+		t.Errorf("send_sms limit %v, want the shared %v", limit, phone.SendLimit)
+	}
+	for name := range defaultRateLimits {
+		if s.MCPServer.GetTool(name) == nil {
+			t.Errorf("built-in rate limit for unregistered tool %q", name)
+		}
 	}
 }

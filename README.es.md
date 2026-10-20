@@ -21,14 +21,14 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 
 ## De un vistazo
 
-| Cero dependencias | Seguro por defecto | Trece servidores enfocados |
+| Cero dependencias | Seguro por defecto | Catorce servidores enfocados |
 |:---|:---|:---|
-| Un binario ARM64 estático por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios, SQLite, sensores del dispositivo, notificaciones, contactos, SMS y LLMs en el dispositivo — cada uno tras una superficie de tools pequeña y auditable. |
+| Un binario ARM64 estático por servidor, Go puro — sin CGO, sin intérprete, nada más que instalar. | Listener solo en loopback, autenticación por API key, TLS opcional, raíces en sandbox, logs redactados, releases firmadas. | Archivos, GitHub, web scraping, shell, LAN, portapapeles, medios, SQLite, sensores del dispositivo, notificaciones, contactos, SMS, LLMs en el dispositivo y tareas programadas — cada uno tras una superficie de tools pequeña y auditable. |
 
 ```
    Claude Code · Gemini CLI · cualquier cliente MCP
                           │
-                          │  Protocolo MCP sobre HTTP/SSE
+                          │  MCP sobre Streamable HTTP · SSE · stdio
                           ▼
        ┌──────────────────────────────────────┐
        │      DroidMCP — Termux · ARM64       │
@@ -49,12 +49,12 @@ manos sobre un dispositivo Android. Sin Node.js, sin Python, sin runtime que ins
 
 ## Servidores
 
-| Servidor | Puerto | Enfoque | Requiere |
+| Servidor | Puerto por defecto | Enfoque | Requiere |
 |----------|:---:|---------|----------|
 | `mcp-filesystem` | `3000` | Operaciones de archivos en sandbox, con protección contra path traversal | `DROIDMCP_ROOT` + key |
 | `mcp-github` | `3001` | API completa de GitHub vía Personal Access Token | `GITHUB_TOKEN` + key |
 | `mcp-scraper` | `3002` | Web scraping y extracción sin Chromium | — |
-| `mcp-termux` | `3003` | Ejecución de shell y gestión de paquetes | key |
+| `mcp-termux` | `3003` | Ejecución de shell y gestión de paquetes | allowlist + key |
 | `mcp-network` | `3004` | Descubrimiento de LAN y escaneo de puertos | — |
 | `mcp-clipboard` | `3005` | Puente del portapapeles de Android vía Termux:API | `termux-api` |
 | `mcp-media` | `3006` | Navegación de medios y transformaciones con `ffmpeg` | `DROIDMCP_ROOT` + key |
@@ -105,7 +105,7 @@ tool, con argumentos y ejemplos, está en la [guía de uso](docs/usage.es.md).
 </details>
 
 <details>
-<summary><b>mcp-scraper</b> — scraping ligero sobre <code>colly</code> + <code>goquery</code>, sin Chromium</summary>
+<summary><b>mcp-scraper</b> — scraping ligero sobre <code>net/http</code> + <code>goquery</code>, sin Chromium</summary>
 <br>
 
 | Tool | Descripción |
@@ -125,9 +125,9 @@ tool, con argumentos y ejemplos, está en la [guía de uso](docs/usage.es.md).
 
 | Tool | Descripción |
 |------|-------------|
-| `run_command` | Ejecuta un comando de shell (restringible por allowlist) |
+| `run_command` | Ejecuta un programa de la allowlist obligatoria |
 | `install_pkg` · `list_pkgs` | Gestión de paquetes vía `pkg` |
-| `read_env` | Lee una o todas las variables de entorno |
+| `read_env` | Lee una o todas las variables de entorno (credenciales redactadas) |
 | `get_storage` | Uso de almacenamiento del home, el prefix y el compartido |
 | `termux_battery_status` · `termux_location` | Estado del dispositivo vía Termux:API |
 | `termux_notification` · `termux_toast` | Muestra notificaciones y toasts |
@@ -273,7 +273,8 @@ El servidor de mayor privilegio de Termux:API: leer mensajes expone códigos
 OTP/2FA y `send_sms` envía un mensaje **real, facturable e irreversible** — así
 que **se niega a arrancar sin key** (`DROIDMCP_SMS_KEY` o `DROIDMCP_API_KEY`).
 `send_sms` valida los destinatarios como números de teléfono y pasa el cuerpo por
-stdin, así que el contenido del mensaje nunca llega a un shell.
+stdin, así que el contenido del mensaje nunca llega a un shell, y está limitado a
+10 mensajes por hora salvo que `DROIDMCP_SMS_RATE_LIMITS` diga otra cosa.
 
 | Tool | Descripción |
 |------|-------------|
@@ -335,7 +336,7 @@ horaria del propio Android.
 ## Inicio rápido
 
 **Desde una release** — cada release incluye un binario por servidor más un
-`SHA256SUMS` firmado ([detalles de verificación](docs/security.md)):
+`SHA256SUMS` firmado ([detalles de verificación](docs/security.md#verifying-a-release)):
 
 ```bash
 curl -LO https://github.com/kahz12/DroidMCP/releases/latest/download/droidmcp-filesystem
@@ -354,7 +355,8 @@ make install                         # opcional: copia a $PREFIX/bin
 ```
 
 **Ejecutar** — exporta los requisitos del servidor y arranca el binario; el
-stream MCP se sirve en `http://localhost:<puerto>/sse`:
+endpoint MCP es `http://localhost:<puerto>/mcp` (Streamable HTTP), y el
+transporte SSE heredado sigue en `/sse`:
 
 ```bash
 export DROIDMCP_API_KEY="$(openssl rand -base64 32)"
@@ -365,7 +367,7 @@ DROIDMCP_PORT=3000 droidmcp-filesystem
 
 ```bash
 curl -fsS http://localhost:3000/healthz
-# {"status":"ok","server":"mcp-filesystem","version":"v0.2.0"}
+# {"status":"ok","server":"mcp-filesystem","version":"v0.4.0"}
 ```
 
 ## Configuración
@@ -375,7 +377,10 @@ por todos los servidores:
 
 | Variable | Descripción | Por defecto |
 |----------|-------------|-------------|
-| `DROIDMCP_PORT` | Puerto TCP donde escucha el listener SSE | `3000` |
+| `DROIDMCP_TRANSPORT` | `http` (Streamable HTTP en `/mcp` + SSE heredado en `/sse`) o `stdio` (el cliente lanza el binario; sin puerto ni key) | `http` |
+| `DROIDMCP_PORT` | Puerto TCP donde escucha el listener HTTP | uno por servidor ([tabla](#servidores)) |
+| `DROIDMCP_<SERVER>_RATE_LIMITS` | Topes de llamadas a tools, p. ej. `DROIDMCP_SMS_RATE_LIMITS=send_sms=3/h,*=120/m`; `off` quita uno incorporado | envío de SMS: `10/h` |
+| `DROIDMCP_<SERVER>_DISABLED_TOOLS` | Tools a desactivar, p. ej. `DROIDMCP_TERMUX_DISABLED_TOOLS=termux_sms_send`; un nombre desconocido detiene el servidor | sin definir |
 | `DROIDMCP_ROOT` | Raíz de archivos, validada al arrancar — obligatoria en `filesystem`, `media`, `sqlite` | — |
 | `DROIDMCP_API_KEY` | Key global; si está definida, toda petición debe llevar `X-DroidMCP-Key` | sin definir |
 | `DROIDMCP_<SERVER>_KEY` | Key por servidor, p. ej. `DROIDMCP_TERMUX_KEY`; prevalece sobre la global | sin definir |
@@ -393,43 +398,63 @@ configurada, comparada en tiempo constante.
 
 ## Integración con clientes
 
-**Claude Code** — `~/.claude/settings.json`:
+**Claude Code** — registra el servidor con la CLI (`--scope user` lo guarda en
+`~/.claude.json` para todos los proyectos):
+
+```bash
+claude mcp add --transport http --scope user filesystem http://localhost:3000/mcp \
+  --header "X-DroidMCP-Key: $DROIDMCP_API_KEY"
+```
+
+**Gemini CLI** — `~/.gemini/settings.json`:
 
 ```json
 {
   "mcpServers": {
     "filesystem": {
-      "type": "sse",
-      "url": "http://localhost:3000/sse",
+      "httpUrl": "http://localhost:3000/mcp",
       "headers": { "X-DroidMCP-Key": "<tu-key>" }
     }
   }
 }
 ```
 
-**Gemini CLI** — mismo endpoint y cabecera, con `uri` en lugar de `url`. Cambia
-a `https://…` cuando TLS esté configurado.
+**Cliente en el propio dispositivo** (Claude Code o Gemini CLI en Termux) —
+olvídate del puerto y la key: con `DROIDMCP_TRANSPORT=stdio` el cliente lanza el
+binario y habla con él por stdin/stdout.
+
+```bash
+claude mcp add --env DROIDMCP_TRANSPORT=stdio --env DROIDMCP_ROOT="$HOME/workspace" \
+  --transport stdio --scope user filesystem -- droidmcp-filesystem
+```
+
+El `.mcp.json` por proyecto, la forma stdio de Gemini y el endpoint SSE heredado
+están en la [guía de uso](docs/usage.es.md#hablar-con-un-servidor). Cambia a
+`https://…` cuando TLS esté configurado.
 
 ## Seguridad
 
 El modelo de amenazas completo y el checklist de producción están en
 [`docs/security.md`](docs/security.md). La versión corta:
 
-- **Sin modo dev en los servidores sensibles.** `filesystem`, `termux`, `media`
-  y `sqlite` se niegan a arrancar sin una key explícita — y `filesystem`,
-  `media` y `sqlite` exigen además `DROIDMCP_ROOT`, así un servidor sin
-  configurar nunca actúa sobre `/` ni corre sin autenticación.
-- **Loopback por diseño.** Todo listener se enlaza a `127.0.0.1`; exponerlo más
-  allá del dispositivo es una decisión explícita que exige key y TLS.
+- **Sin modo dev en los servidores sensibles.** `filesystem`, `termux`, `media`,
+  `sqlite`, `github`, `sms` y `automation` se niegan a escuchar sin una key
+  explícita, y `filesystem`, `media` y `sqlite` exigen además `DROIDMCP_ROOT` —
+  así un servidor sin configurar nunca actúa sobre `/` ni corre sin
+  autenticación. Por stdio no hay listener, así que no hace falta key.
+- **Loopback por diseño.** Todo listener se enlaza a `127.0.0.1` y comprueba las
+  cabeceras `Host` y `Origin` contra DNS rebinding; exponerlo más allá del
+  dispositivo es una decisión explícita que exige key y TLS.
 - **Rutas en sandbox.** Se rechazan rutas absolutas y `..`, se resuelven
   symlinks y se re-verifica el confinamiento en cada ruta que tocan los
   servidores; `mcp-sqlite` además enlaza todos los valores SQL como parámetros.
 - **Valores de red conservadores.** `mcp-scraper` bloquea objetivos
   privados/loopback (SSRF) y `mcp-network` bloquea los públicos; ambos son
   opt-ins explícitos.
-- **`mcp-termux` es una shell remota.** Restríngelo con
-  `DROIDMCP_TERMUX_ALLOWLIST`, dale una key dedicada y arráncalo solo cuando lo
-  necesites.
+- **`mcp-termux` es una shell remota.** No arranca sin
+  `DROIDMCP_TERMUX_ALLOWLIST` (permitir todo exige un `*` explícito); dale una
+  key dedicada, desactiva las tools que no uses con
+  `DROIDMCP_TERMUX_DISABLED_TOOLS` y arráncalo solo cuando lo necesites.
 - **Logs redactados, releases firmadas.** Los atributos con pinta de secreto se
   reemplazan por `[REDACTED]`; las releases incluyen `SHA256SUMS` con firma de
   cosign.
@@ -439,23 +464,28 @@ El modelo de amenazas completo y el checklist de producción están en
 ```
 cmd/<servidor>/     un paquete main por servidor (filesystem, github, scraper,
                     termux, network, clipboard, media, sqlite, sensors,
-                    notifications, contacts, sms)
-internal/           core — servidor HTTP/SSE compartido · config · logger · buildinfo
+                    notifications, contacts, sms, llmproxy, automation)
+internal/           core — servidor compartido (Streamable HTTP · SSE · stdio) ·
+                    config · logger · pathsec (confinamiento en la raíz) ·
+                    phone (destinatarios de SMS) · buildinfo
 docs/               guía de uso (EN/ES) · seguridad · puesta a punto de Termux
 scripts/            compilación cruzada ARM64 reproducible
 ```
 
 Construido con Go 1.26 sobre [mark3labs/mcp-go](https://github.com/mark3labs/mcp-go),
 [google/go-github](https://github.com/google/go-github),
-[gocolly/colly](https://github.com/gocolly/colly) +
 [goquery](https://github.com/PuerkitoBio/goquery),
-[modernc.org/sqlite](https://gitlab.com/cznic/sqlite) y
+[modernc.org/sqlite](https://gitlab.com/cznic/sqlite),
+[mvdan.cc/sh](https://github.com/mvdan/sh) y
 [spf13/viper](https://github.com/spf13/viper). El CI aplica `gofmt`, `go vet`,
-`go test -race`, `golangci-lint` y `gosec`; las releases etiquetadas se
-compilan de forma reproducible y se firman.
+`go test -race`, `golangci-lint`, `gosec` y `govulncheck`, y compila el destino
+ARM64 en cada cambio; las releases etiquetadas se compilan de forma
+reproducible y se firman. Los cambios de cada release están en
+[CHANGELOG.md](CHANGELOG.md).
 
 Las contribuciones son bienvenidas — lee [CONTRIBUTING.md](CONTRIBUTING.md) y
-consulta [ROADMAP.md](ROADMAP.md) para ver el trabajo planificado.
+consulta [ROADMAP.md](ROADMAP.md) para ver el trabajo planificado. Reporta las
+vulnerabilidades en privado, como se explica en [SECURITY.md](SECURITY.md).
 
 ## Licencia
 

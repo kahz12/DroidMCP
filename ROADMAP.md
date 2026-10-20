@@ -14,7 +14,7 @@ just a binary that works.
 ```
 Claude Code / Gemini CLI
         |
-        | HTTP/SSE (MCP Protocol)
+        | MCP over Streamable HTTP · SSE · stdio
         v
   DroidMCP Server  <-- runs on Termux (Android)
         |
@@ -27,17 +27,18 @@ Claude Code / Gemini CLI
 
 ## Tech Stack
 
-| Component        | Technology                  |
-|------------------|-----------------------------|
-| Language         | Go                          |
-| MCP Transport    | HTTP/SSE                    |
-| MCP SDK          | `mark3labs/mcp-go`          |
-| GitHub API       | `google/go-github`          |
-| Scraping         | `gocolly/colly`             |
-| Config           | `spf13/viper`               |
-| CLI              | `spf13/cobra`               |
-| Build target     | `GOOS=linux GOARCH=arm64`   |
-| Structure        | Monorepo                    |
+| Component        | Technology                                   |
+|------------------|----------------------------------------------|
+| Language         | Go (pure Go, `CGO_ENABLED=0`)                |
+| MCP Transport    | Streamable HTTP · SSE · stdio                |
+| MCP SDK          | `mark3labs/mcp-go`                           |
+| GitHub API       | `google/go-github`                           |
+| Scraping         | `net/http` + `PuerkitoBio/goquery`           |
+| SQLite           | `modernc.org/sqlite`                         |
+| Task scripts     | `mvdan.cc/sh` (embedded shell interpreter)   |
+| Config           | `spf13/viper` (environment variables only)   |
+| Build target     | `GOOS=linux GOARCH=arm64`                    |
+| Structure        | Monorepo                                     |
 
 ---
 
@@ -45,40 +46,30 @@ Claude Code / Gemini CLI
 
 ```
 DroidMCP/
-├── cmd/
-│   ├── filesystem/
-│   │   └── main.go
-│   ├── github/
-│   │   └── main.go
-│   ├── scraper/
-│   │   └── main.go
-│   ├── termux/
-│   │   └── main.go
-│   ├── clipboard/
-│   │   └── main.go
-│   └── network/
-│       └── main.go
+├── cmd/                  one MCP server per directory, each a main package:
+│                         filesystem, github, scraper, termux, network,
+│                         clipboard, media, sqlite, sensors, notifications,
+│                         contacts, sms, llmproxy, automation
 ├── internal/
-│   ├── core/
-│   │   └── server.go
-│   ├── logger/
-│   │   └── logger.go
-│   ├── config/
-│   │   └── config.go
-│   └── buildinfo/
-│       └── buildinfo.go
+│   ├── core/             shared server: transports, auth, Host/Origin guard, /healthz
+│   ├── config/           DROIDMCP_* settings, per-server default ports
+│   ├── logger/           slog with credential redaction
+│   ├── pathsec/          containment of paths in DROIDMCP_ROOT
+│   ├── phone/            SMS recipient validation
+│   └── buildinfo/        version stamped at build time
 ├── scripts/
 │   └── build-arm64.sh
-├── docs/
-│   ├── setup-termux.md
-│   └── security.md
+├── docs/                 usage guide (EN/ES), security, Termux setup
 ├── .github/
-│   └── workflows/
-│       └── build.yml
+│   ├── workflows/build.yml
+│   └── dependabot.yml
 ├── Makefile
 ├── go.mod
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── SECURITY.md
 ├── ROADMAP.md
-└── README.md
+└── README.md (+ README.es.md)
 ```
 
 ---
@@ -94,6 +85,9 @@ DroidMCP/
 
 ### Shared Core `internal/`
 - [x] `internal/core/server.go` — Reusable MCP base server with HTTP/SSE
+- [x] Streamable HTTP transport at `/mcp` (current MCP spec) alongside the legacy SSE endpoints, plus `DROIDMCP_TRANSPORT=stdio` for clients running on the device
+- [x] Per-server default ports (`3000`–`3013`) and `DROIDMCP_<SERVER>_DISABLED_TOOLS` to switch off individual tools on any server
+- [x] `DROIDMCP_<SERVER>_RATE_LIMITS`: sliding-window caps on tool calls, per tool or per server, on every transport; SMS sending capped at 10/h by default
 - [x] `internal/logger/logger.go` — Shared structured logger
 - [x] `internal/config/config.go` — Environment variable config loader
 
@@ -101,6 +95,7 @@ DroidMCP/
 - [x] `scripts/build-arm64.sh` — Compiles all binaries for ARM64
 - [x] `Makefile` — Commands: `build`, `test`, `clean`, `install`
 - [x] `.github/workflows/build.yml` — CI/CD: auto build + release on each tag
+- [x] Supply chain: SHA-pinned third-party actions, pinned lint/gosec versions, `govulncheck`, linux/arm64 build on every PR, Dependabot
 
 ---
 
@@ -165,7 +160,7 @@ DroidMCP/
 | `extract_metadata` | Extract title, description, og:*, twitter:* |
 
 ### Tasks
-- [x] Integrate `gocolly/colly` + `goquery`
+- [x] Integrate `goquery` (first on top of `gocolly/colly`, later replaced by a plain `net/http` client that applies the SSRF checks on every dial)
 - [x] Configurable user-agent
 - [x] Rate limiting and timeout handling
 - [x] Basic custom headers support

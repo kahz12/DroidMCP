@@ -26,9 +26,9 @@ const (
 	envLogFormat = "DROIDMCP_LOG_FORMAT"
 )
 
-// redactedMarker is the placeholder that replaces sensitive values in
-// logged attributes.
-const redactedMarker = "[REDACTED]"
+// RedactedMarker is the placeholder that replaces sensitive values in
+// logged attributes (and in mcp-termux's read_env output).
+const RedactedMarker = "[REDACTED]"
 
 // Log is the global structured logger instance.
 var Log *slog.Logger
@@ -74,7 +74,7 @@ func parseLevel(s string) slog.Level {
 
 // redactingReplaceAttr is plugged into HandlerOptions. For each non-builtin
 // attribute, if the key looks like it carries a credential the value is
-// replaced with redactedMarker. Built-in attrs (time/level/msg/source) and
+// replaced with RedactedMarker. Built-in attrs (time/level/msg/source) and
 // group attrs are passed through untouched so the log structure stays
 // intact.
 func redactingReplaceAttr(groups []string, a slog.Attr) slog.Attr {
@@ -87,8 +87,8 @@ func redactingReplaceAttr(groups []string, a slog.Attr) slog.Attr {
 	if a.Value.Kind() == slog.KindGroup {
 		return a
 	}
-	if isSensitiveKey(a.Key) {
-		return slog.String(a.Key, redactedMarker)
+	if IsSensitiveKey(a.Key) {
+		return slog.String(a.Key, RedactedMarker)
 	}
 	return a
 }
@@ -108,13 +108,14 @@ var sensitiveSubstrings = []string{
 	"api-key",
 }
 
-// isSensitiveKey reports whether the given slog attribute key likely
-// carries a credential. It runs a case-insensitive substring check against
+// IsSensitiveKey reports whether the given name — a slog attribute key, or an
+// environment variable name in mcp-termux's read_env — likely carries a
+// credential. It runs a case-insensitive substring check against
 // sensitiveSubstrings and an additional word-boundary check for the
 // standalone token "key" so "api_key" / "x-api-key" / "primary_key" are
 // caught while "monkey" / "keyboard" / "keep" / "ApiKey" too (camelCase is
 // handled by lowercasing then checking "apikey" substring).
-func isSensitiveKey(key string) bool {
+func IsSensitiveKey(key string) bool {
 	lk := strings.ToLower(key)
 	for _, s := range sensitiveSubstrings {
 		if strings.Contains(lk, s) {

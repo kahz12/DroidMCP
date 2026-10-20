@@ -1,0 +1,21 @@
+# Weekly update PRs for the Go modules and for the GitHub Actions pinned by
+# commit SHA in .github/workflows/build.yml (Dependabot rewrites the SHA and
+# its version comment together). Minor and patch bumps are grouped into one PR
+# per ecosystem; major versions arrive on their own so they get a real review.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]

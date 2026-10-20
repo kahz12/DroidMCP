@@ -60,13 +60,14 @@ const (
 )
 
 func main() {
-	cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfig("automation")
 	if err != nil {
 		logger.Fatal("Failed to load config", err)
 	}
 
 	apiKey := config.ResolveAPIKey("automation")
-	if apiKey == "" {
+	// Over stdio there is no listener, so only the launching process can reach it.
+	if apiKey == "" && !cfg.Stdio() {
 		logger.Log.Error("mcp-automation requires DROIDMCP_AUTOMATION_KEY or DROIDMCP_API_KEY to be set. Refusing to start (tasks run commands unattended).")
 		os.Exit(1)
 	}
@@ -93,7 +94,7 @@ func main() {
 
 	sched = newScheduler(st, allow, loc)
 	go sched.loop(sched.life)
-	// Stop task runs as soon as a shutdown signal arrives (core.ServeSSE also
+	// Stop task runs as soon as a shutdown signal arrives (core.Serve also
 	// receives it and drains HTTP): a run_task call blocked on a long script
 	// would otherwise hold the drain open until its deadline.
 	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -105,7 +106,7 @@ func main() {
 	server.APIKey = apiKey
 	registerTools(server)
 
-	err = server.ServeSSE(cfg.Port)
+	err = server.Serve(cfg)
 	sched.shutdown()
 	if err != nil {
 		logger.Fatal("Server failed", err)

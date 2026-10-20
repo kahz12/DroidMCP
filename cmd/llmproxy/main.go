@@ -25,7 +25,7 @@ const (
 )
 
 func main() {
-	cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfig("llmproxy")
 	if err != nil {
 		logger.Fatal("Failed to load config", err)
 	}
@@ -48,7 +48,7 @@ func main() {
 
 	logger.Info("Ollama backend configured", "host", ollama.base.String())
 
-	if err := server.ServeSSE(cfg.Port); err != nil {
+	if err := server.Serve(cfg); err != nil {
 		logger.Fatal("Server failed", err)
 	}
 }

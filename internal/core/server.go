@@ -9,22 +9,26 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/kahz12/droidmcp/internal/config"
 	"github.com/kahz12/droidmcp/internal/logger"
 	"github.com/mark3labs/mcp-go/server"
 )
 
 // HTTP timeouts. WriteTimeout is intentionally left at 0 because SSE streams
-// are long-lived and we do not want to interrupt them. ReadHeaderTimeout and
-// IdleTimeout still protect the /message endpoint against slowloris-style
-// abuse.
+// (legacy /sse and the Streamable HTTP GET stream) are long-lived and we do not
+// want to interrupt them. ReadHeaderTimeout and IdleTimeout still protect the
+// POST endpoints against slowloris-style abuse.
 const (
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 120 * time.Second
@@ -34,6 +38,10 @@ const (
 // authHeader is the request header every DroidMCP client must set when a
 // server is configured with an API key.
 const authHeader = "X-DroidMCP-Key"
+
+// minKeyLength is the API key length below which startup warns. The docs
+// suggest `openssl rand -base64 32`, which yields 44 characters.
+const minKeyLength = 16
 
 // Env keys for optional TLS support. Both must be set to a readable cert/key
 // pair; otherwise the server falls back to plain HTTP on 127.0.0.1.
@@ -46,6 +54,10 @@ const (
 // with operator-supplied hostnames (comma-separated, no port), for
 // reverse-proxy or port-forward front-ends. See hostGuard.
 const envAllowedHosts = "DROIDMCP_ALLOWED_HOSTS"
+
+// streamablePath is where the Streamable HTTP transport is mounted. The legacy
+// SSE transport keeps its own /sse and /message routes on the same listener.
+const streamablePath = "/mcp"
 
 // DroidServer wraps the MCP server to provide common transport initialization.
 type DroidServer struct {
@@ -60,6 +72,11 @@ type DroidServer struct {
 	// inbound request. An empty value disables authentication (dev mode) and
 	// is logged loudly at startup.
 	APIKey string
+
+	// DefaultRateLimits are the server's built-in limits by tool name (or
+	// config.AllTools), applied unless DROIDMCP_<SERVER>_RATE_LIMITS overrides
+	// or switches them off. Most servers set none.
+	DefaultRateLimits map[string]config.RateLimit
 }
 
 // NewDroidServer initializes a new MCP server with the given identity.
@@ -72,14 +89,77 @@ func NewDroidServer(name, version string) *DroidServer {
 	}
 }
 
-// ServeSSE starts the server using the SSE (Server-Sent Events) transport.
+// Serve installs the rate limits and removes the tools the operator disabled,
+// then runs the server on the transport cfg selects (DROIDMCP_TRANSPORT):
+// stdio, or the loopback HTTP listener on cfg.Port. It blocks until the client
+// goes away (stdio) or a shutdown signal arrives.
+func (s *DroidServer) Serve(cfg *config.Config) error {
+	if err := s.applyRateLimits(cfg); err != nil {
+		return err
+	}
+	if err := s.disableTools(cfg); err != nil {
+		return err
+	}
+	if cfg.Stdio() {
+		return s.serveStdio()
+	}
+	return s.serveHTTP(cfg.Port)
+}
+
+// disableTools unregisters the tools listed in DROIDMCP_<SERVER>_DISABLED_TOOLS
+// so clients can neither list nor call them. An unknown name is an error rather
+// than a no-op: a typo would otherwise leave enabled the very tool the operator
+// meant to switch off.
+func (s *DroidServer) disableTools(cfg *config.Config) error {
+	if len(cfg.DisabledTools) == 0 {
+		return nil
+	}
+	registered := s.MCPServer.ListTools()
+	var unknown []string
+	for _, name := range cfg.DisabledTools {
+		if _, ok := registered[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("%s names unknown tool(s) %s; %s has: %s",
+			config.DisabledToolsVar(cfg.Server), strings.Join(unknown, ", "), s.Name, strings.Join(s.toolNames(), ", "))
+	}
+	s.MCPServer.DeleteTools(cfg.DisabledTools...)
+	logger.Info("Tools disabled", "tools", strings.Join(cfg.DisabledTools, ","))
+	return nil
+}
+
+// serveStdio speaks MCP over stdin/stdout until stdin closes or SIGINT/SIGTERM
+// arrives. Logs already go to stderr, so stdout carries only protocol frames.
+func (s *DroidServer) serveStdio() error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	logger.Info("Starting MCP stdio server", "server", s.Name, "version", s.Version)
+	return s.listenStdio(ctx, os.Stdin, os.Stdout)
+}
+
+// listenStdio is serveStdio without the process plumbing, so tests can drive
+// it with in-memory streams. A cancelled context is a clean stop, not an error.
+func (s *DroidServer) listenStdio(ctx context.Context, in io.Reader, out io.Writer) error {
+	stdio := server.NewStdioServer(s.MCPServer)
+	stdio.SetErrorLogger(slog.NewLogLogger(logger.Log.Handler(), slog.LevelError))
+	if err := stdio.Listen(ctx, in, out); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	return nil
+}
+
+// serveHTTP serves MCP over HTTP: Streamable HTTP at /mcp and the legacy SSE
+// transport at /sse + /message, on one listener.
 // The listener is always bound to 127.0.0.1 so the server is unreachable from
 // external network interfaces. Every request must also carry a loopback Host
-// header (hostGuard) so a rebinding browser cannot reach the dev-mode servers.
-// All routes (SSE and message endpoints) are wrapped in the API key middleware;
-// /healthz is exposed unauthenticated for supervisors. TLS is enabled when both
-// DROIDMCP_TLS_CERT and DROIDMCP_TLS_KEY are set.
-func (s *DroidServer) ServeSSE(port int) error {
+// header and, when a browser sends one, a loopback Origin (hostGuard) so a
+// rebinding or cross-site page cannot reach the dev-mode servers.
+// All MCP routes are wrapped in the API key middleware; /healthz is exposed
+// unauthenticated for supervisors. TLS is enabled when both DROIDMCP_TLS_CERT
+// and DROIDMCP_TLS_KEY are set.
+func (s *DroidServer) serveHTTP(port int) error {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 
 	tlsCert := os.Getenv(envTLSCert)
@@ -92,22 +172,27 @@ func (s *DroidServer) ServeSSE(port int) error {
 	}
 	baseURL := fmt.Sprintf("%s://%s", scheme, addr)
 
-	sseServer := server.NewSSEServer(s.MCPServer, server.WithBaseURL(baseURL))
-	handler := buildHandler(s, useTLS, sseServer)
-
 	httpSrv := &http.Server{
 		Addr:              addr,
-		Handler:           handler,
+		Handler:           s.httpHandler(baseURL, useTLS),
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
 	}
 
+	// Failed keys are not rate limited: every client is 127.0.0.1, so a lockout
+	// would let any local app lock the real client out. Key length is the
+	// defence against guessing, so flag a short one.
+	if s.APIKey != "" && len(s.APIKey) < minKeyLength {
+		logger.Log.Warn("API key is shorter than the recommended length; generate one with `openssl rand -base64 32`",
+			"length", len(s.APIKey), "recommended", minKeyLength)
+	}
+
 	if s.APIKey == "" {
-		logger.Info("Starting MCP SSE Server (auth DISABLED — dev mode)",
-			"addr", addr, "url", baseURL+"/sse", "tls", useTLS)
+		logger.Info("Starting MCP HTTP server (auth DISABLED — dev mode)",
+			"addr", addr, "url", baseURL+streamablePath, "sse_url", baseURL+"/sse", "tls", useTLS)
 	} else {
-		logger.Info("Starting MCP SSE Server",
-			"addr", addr, "url", baseURL+"/sse", "auth", "enabled", "tls", useTLS)
+		logger.Info("Starting MCP HTTP server",
+			"addr", addr, "url", baseURL+streamablePath, "sse_url", baseURL+"/sse", "auth", "enabled", "tls", useTLS)
 	}
 
 	// Wait for SIGINT/SIGTERM in a separate goroutine and trigger a graceful
@@ -141,13 +226,32 @@ func (s *DroidServer) ServeSSE(port int) error {
 	}
 }
 
-// buildHandler composes the full middleware chain around the SSE handler. It
-// is exported (lowercase but in-package) for direct testing without binding a
-// network listener.
-func buildHandler(s *DroidServer, tlsEnabled bool, sseHandler http.Handler) http.Handler {
+// httpHandler builds the complete HTTP handler: both MCP transports behind the
+// middleware chain. baseURL is the origin the SSE transport advertises for its
+// /message endpoint.
+func (s *DroidServer) httpHandler(baseURL string, tlsEnabled bool) http.Handler {
+	sseServer := server.NewSSEServer(s.MCPServer, server.WithBaseURL(baseURL))
+	streamable := server.NewStreamableHTTPServer(s.MCPServer, server.WithEndpointPath(streamablePath))
+	return buildHandler(s, tlsEnabled, mcpRoutes(streamable, sseServer))
+}
+
+// mcpRoutes mounts both MCP transports: Streamable HTTP at streamablePath and
+// everything else on the SSE server, which answers /sse and /message and 404s
+// any other path.
+func mcpRoutes(streamable, sse http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle(streamablePath, streamable)
+	mux.Handle("/", sse)
+	return mux
+}
+
+// buildHandler composes the full middleware chain around the MCP transport
+// handler. It is exported (lowercase but in-package) for direct testing
+// without binding a network listener.
+func buildHandler(s *DroidServer, tlsEnabled bool, mcpHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
-	mux.Handle("/", authMiddleware(s.APIKey, sseHandler))
+	mux.Handle("/", authMiddleware(s.APIKey, mcpHandler))
 	guarded := hostGuard(parseAllowedHosts(os.Getenv(envAllowedHosts)), mux)
 	return requestLogger(securityHeaders(tlsEnabled, guarded))
 }
@@ -172,6 +276,11 @@ func parseAllowedHosts(raw string) map[string]struct{} {
 // which matters most for the key-less (dev-mode) servers where auth would not
 // otherwise stop it. Reverse-proxy / port-forward front-ends can add their
 // external hostname via DROIDMCP_ALLOWED_HOSTS.
+//
+// A browser also names the page that issued the request in Origin; the
+// Streamable HTTP spec requires servers to validate it. MCP clients outside a
+// browser send none, so only a present Origin is checked, against the same
+// loopback-or-allowlisted rule ("null", from sandboxed or file:// pages, fails).
 func hostGuard(extra map[string]struct{}, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !hostAllowed(r.Host, extra) {
@@ -180,8 +289,24 @@ func hostGuard(extra map[string]struct{}, next http.Handler) http.Handler {
 			http.Error(w, "forbidden host", http.StatusForbidden)
 			return
 		}
+		if origin := r.Header.Get("Origin"); origin != "" && !originAllowed(origin, extra) {
+			logger.Log.Warn("origin rejected",
+				"remote", r.RemoteAddr, "origin", origin, "path", r.URL.Path)
+			http.Error(w, "forbidden origin", http.StatusForbidden)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// originAllowed reports whether an Origin header ("scheme://host[:port]")
+// names a host hostAllowed accepts.
+func originAllowed(origin string, extra map[string]struct{}) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return hostAllowed(u.Host, extra)
 }
 
 // hostAllowed reports whether the Host header names a loopback destination

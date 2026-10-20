@@ -33,15 +33,16 @@ Mitigations the codebase currently implements:
 | Layer | Mitigation |
 |-------|------------|
 | Auth | Per-server / global API key checked with `crypto/subtle.ConstantTimeCompare`. `mcp-filesystem`, `mcp-termux`, `mcp-media`, `mcp-sqlite`, `mcp-github`, `mcp-sms` and `mcp-automation` refuse to start without one. |
-| Transport | Optional TLS via `DROIDMCP_TLS_CERT` / `_KEY`; HSTS sent only when TLS is active. |
-| Host binding | Listener bound to `127.0.0.1`; every request must also present a loopback `Host` header (or one listed in `DROIDMCP_ALLOWED_HOSTS`), so a DNS-rebinding browser cannot drive the dev-mode servers. |
+| Transport | Optional TLS via `DROIDMCP_TLS_CERT` / `_KEY`; HSTS sent only when TLS is active. `DROIDMCP_TRANSPORT=stdio` opens no listener at all: only the process that launched the server can talk to it. |
+| Host binding | Listener bound to `127.0.0.1`; every request must also present a loopback `Host` header (or one listed in `DROIDMCP_ALLOWED_HOSTS`), so a DNS-rebinding browser cannot drive the dev-mode servers. A browser's `Origin` header, when present, must pass the same check, as the Streamable HTTP spec requires. |
 | Headers | `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` on every response. |
 | Logging | `slog`-based, with credential redaction in attribute keys (`api_key`, `token`, `password`, …). |
 | `mcp-filesystem` | Requires an explicit `DROIDMCP_ROOT` and an API key. `securePath` rejects absolute paths and `..` traversal, then resolves symlinks and re-checks so a symlink under the root cannot point outside it — including a dangling symlink, whose not-yet-existing target would otherwise be created outside the root by a write. A `DROIDMCP_ROOT` of `/` is refused at startup (filesystem, media and sqlite). `copy_file` compares real locations, so a directory cannot be copied into or over itself through a symlink alias. |
 | `mcp-scraper` | Anti-SSRF: rejects RFC1918 / loopback / link-local by default (override with `DROIDMCP_SCRAPER_ALLOW_PRIVATE=1`), validated at the URL, on every redirect, and on the concrete resolved IP the socket dials (closes DNS rebinding). |
 | `mcp-termux` `run_command` | `env_extra` rejects dynamic-linker overrides (`LD_*`, `DYLD_*`) so a caller cannot `LD_PRELOAD` past the command allowlist. |
 | `mcp-network` | Refuses public targets by default (override with `DROIDMCP_NETWORK_ALLOW_PUBLIC=1`). |
-| `mcp-termux` | Optional allowlist via `DROIDMCP_TERMUX_ALLOWLIST=cmd1,cmd2,…`; `install_pkg` quotes the package name (`pkg install -- <name>`). |
+| `mcp-termux` | Mandatory allowlist via `DROIDMCP_TERMUX_ALLOWLIST=cmd1,cmd2,…` — no allow-all default; `*` opts into it explicitly (with a startup warning). `install_pkg` quotes the package name (`pkg install -- <name>`); `termux_sms_send` validates recipients and passes the body on stdin, like `mcp-sms`; `read_env` withholds credential-looking variables. |
+| Every server | `DROIDMCP_<SERVER>_DISABLED_TOOLS` removes tools before the server starts; an unknown name refuses to start, so a typo cannot leave a tool enabled. `DROIDMCP_<SERVER>_RATE_LIMITS` caps calls per tool or per server over a sliding window, on every transport; the SMS-sending tools are capped at 10 per hour by default. |
 | `mcp-clipboard` | All inputs piped via stdin, never embedded in shell arguments. |
 | `mcp-sqlite` | Requires `DROIDMCP_ROOT` + an API key; values bind as `?` parameters; `describe_table` validates the table name against the schema before quoting it; the read tools (`query`, `list_tables`, `describe_table`, `export_csv`) run on a `mode=ro` connection so the engine rejects any write, even one stacked after a `SELECT` or fronted by a CTE. `ATTACH DATABASE` and `VACUUM … INTO` are rejected by every SQL tool (`query`, `execute`, `export_csv`): they take a file path from the SQL text and would read or write files outside the root. |
 | `mcp-contacts` | Read-only. The `termux-contact-list` backend takes no arguments; every filter (`query`, `name`, `number`) is applied in memory, so no caller-supplied text reaches a command line — there is no argument-injection surface. Dev mode is allowed on loopback, but a key is recommended because the address book is personal data. |
@@ -56,8 +57,13 @@ Known gaps that operators should keep in mind:
   *inside the root* between the check and the operation could still
   race it. Don't mount a root that other untrusted processes can write
   to.
-- No rate limit yet. Pair the server with a reverse proxy if you need
-  one.
+- Rate limits count **tool calls**, which is what a runaway or
+  prompt-injected agent repeats. There is no limit on raw HTTP requests
+  or on failed key attempts: every client is `127.0.0.1`, so a lockout
+  would let any local app lock the real client out (see
+  [Authentication](#authentication)). If you expose a server beyond the
+  device, put a reverse proxy with request limits in front of it.
+- Limits are kept in memory, so restarting the server resets them.
 
 ## Authentication
 
@@ -75,7 +81,11 @@ Every server enforces the same scheme:
    key, because they expose command execution (immediate or scheduled),
    read/write filesystem/database access, a GitHub token that can read
    private repos and push commits, or SMS send plus OTP/2FA message
-   contents.
+   contents. The rule guards the listener, so it applies to the HTTP
+   transport only: over stdio (`DROIDMCP_TRANSPORT=stdio`) the server
+   reads requests from the process that launched it and nothing else can
+   connect, so no key is needed or checked. That launching process already
+   runs as the Termux user, which the threat model leaves out of scope.
 3. If a key is set, every inbound request must carry it in the
    `X-DroidMCP-Key` HTTP header. The comparison is constant-time.
 4. Independently of the key, every request's `Host` header must name a
@@ -83,10 +93,17 @@ Every server enforces the same scheme:
    listed in `DROIDMCP_ALLOWED_HOSTS` (comma-separated, no port — set it
    when fronting the server with a reverse proxy or port-forward).
    Requests with any other `Host` get `403`, which stops a malicious web
-   page from reaching a dev-mode server via DNS rebinding.
+   page from reaching a dev-mode server via DNS rebinding. An `Origin`
+   header (sent by browsers, not by MCP clients) must name an allowed host
+   too, so a cross-site page cannot drive a server either.
 5. `GET /healthz` is served without the API key so external supervisors
    (systemd, k8s, docker healthchecks) can probe the server; the loopback
    `Host` check still applies.
+6. Failed key attempts are not rate limited. All clients reach the
+   listener as `127.0.0.1`, so throttling failures would let any app on
+   the device lock the real client out. A long random key is what makes
+   guessing hopeless; the server warns at startup when the key is shorter
+   than 16 characters (`openssl rand -base64 32` gives 44).
 
 Per-server keys override the global one, so you can give a different
 client a different key per MCP:
@@ -101,22 +118,21 @@ export DROIDMCP_TERMUX_KEY="$(openssl rand -base64 32)"
 Clients pass the key as a header. Example with `curl`:
 
 ```bash
-curl -H "X-DroidMCP-Key: $DROIDMCP_API_KEY" http://localhost:3000/sse
+curl -H "X-DroidMCP-Key: $DROIDMCP_API_KEY" -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' http://localhost:3000/mcp \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 ```
 
-For Claude Code / Gemini CLI, set the header in the MCP server entry:
+For Claude Code, pass the header when adding the server (Gemini CLI takes the
+same `--header` flag, or a `headers` object in `settings.json`):
 
-```json
-{
-  "mcpServers": {
-    "filesystem": {
-      "type": "sse",
-      "url": "https://localhost:3000/sse",
-      "headers": { "X-DroidMCP-Key": "<paste-the-same-value>" }
-    }
-  }
-}
+```bash
+claude mcp add --transport http --scope user filesystem https://localhost:3000/mcp \
+  --header "X-DroidMCP-Key: $DROIDMCP_API_KEY"
 ```
+
+Per-client details are in the
+[usage guide](usage.md#talking-to-a-server).
 
 ## TLS
 
@@ -235,18 +251,33 @@ shell. Three safeguards exist:
 
 - `install_pkg` quotes the package name (`pkg install -- <name>`) so
   flags injected via the package field cannot reach `pkg`.
-- `DROIDMCP_TERMUX_ALLOWLIST` restricts which top-level commands are
-  callable through `run_command`:
+- `DROIDMCP_TERMUX_ALLOWLIST` lists the top-level commands
+  `run_command` may start, and it is mandatory — the server refuses to
+  start without it:
 
   ```bash
   export DROIDMCP_TERMUX_ALLOWLIST="ls,cat,grep,git,go"
   ```
 
-  When unset, every command is allowed. The wrappers (`termux-battery-status`,
+  Allowing every program takes an explicit `DROIDMCP_TERMUX_ALLOWLIST=*`,
+  which logs a warning at startup. The fixed-command tools (`install_pkg`,
+  `list_pkgs` and the wrappers `termux-battery-status`,
   `termux-location`, `termux-notification`, `termux-toast`,
-  `termux-sms-send`, `termux-tts-speak`) bypass the allowlist on
-  purpose — those are explicit tools and the operator opted in by
-  starting the server.
+  `termux-sms-send`, `termux-tts-speak`) do not consult the allowlist —
+  the caller cannot choose what they run — so switch off the ones you
+  don't want with `DROIDMCP_TERMUX_DISABLED_TOOLS`:
+
+  ```bash
+  # Only the read-only device wrappers, no shell at all:
+  export DROIDMCP_TERMUX_DISABLED_TOOLS="run_command,install_pkg,termux_sms_send"
+  ```
+
+  With `run_command` disabled, no allowlist is required.
+- `read_env` replaces the values of variables whose names look like
+  credentials (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*`, `KEY`
+  as a word) with `[REDACTED]`. The server's environment usually holds
+  its own key and often `GITHUB_TOKEN`; a model reading them could be
+  steered into leaking them.
 - `run_command`'s `env_extra` refuses dynamic-linker overrides
   (`LD_*`, `DYLD_*`): otherwise a caller could `LD_PRELOAD` arbitrary
   code into an allowlisted, benign binary and sidestep the allowlist.
@@ -258,7 +289,9 @@ legitimately-allowlisted programs (`sh`, `python`, `find`, `git`) can
 themselves run other code, so treat the allowlist as reducing blast
 radius, not as a strict sandbox.
 
-If you do not need shell access, do not start `droidmcp-termux`.
+If you do not need shell access, do not start `droidmcp-termux` — or,
+if you only want its device wrappers, start it with
+`DROIDMCP_TERMUX_DISABLED_TOOLS=run_command,install_pkg`.
 
 ## `mcp-automation`: scheduled scripts
 
@@ -353,6 +386,39 @@ with `0600`/`0700` permissions. Treat that file as sensitive — it is a
 map of the local network — and point `DROIDMCP_NETWORK_DB` at a path only
 the service user can read when running multi-tenant.
 
+## Verifying a release
+
+Each release ships `SHA256SUMS` plus a keyless cosign signature of it
+(`SHA256SUMS.sig`) and the signing certificate (`SHA256SUMS.pem`). The
+certificate is issued to the release workflow of this repository for a
+`v*` tag, so checking its identity proves the checksums came from that
+workflow and were not edited afterwards. Then check the binaries against
+the checksums:
+
+```bash
+base=https://github.com/kahz12/DroidMCP/releases/latest/download
+for f in droidmcp-filesystem SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem; do
+  curl -fsSLO "$base/$f"
+done
+
+cosign verify-blob \
+  --certificate SHA256SUMS.pem \
+  --signature SHA256SUMS.sig \
+  --certificate-identity-regexp '^https://github\.com/kahz12/DroidMCP/\.github/workflows/build\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  SHA256SUMS                         # prints "Verified OK"
+
+sha256sum -c SHA256SUMS --ignore-missing   # droidmcp-filesystem: OK
+```
+
+`cosign` is a Go program (`go install github.com/sigstore/cosign/v2/cmd/cosign@latest`);
+verification also queries the public Rekor transparency log, so it needs
+network access. Pin `@refs/tags/v0.4.0` instead of the `@refs/tags/v`
+prefix to accept exactly one release. The release build flags are
+reproducible (`-trimpath`, `-buildid=`), so rebuilding the tag with
+`scripts/build-arm64.sh` and the same Go release is expected to give the
+same hashes.
+
 ## Production checklist
 
 Before exposing any DroidMCP server beyond `localhost`:
@@ -362,17 +428,24 @@ Before exposing any DroidMCP server beyond `localhost`:
 - [ ] `DROIDMCP_TLS_CERT` / `_KEY` configured if the listener is
       reachable from anything but loopback.
 - [ ] `DROIDMCP_ROOT` set to a dedicated directory (required by
-      `mcp-filesystem`, which won't start without it) — never `/`.
+      `mcp-filesystem`, `mcp-media` and `mcp-sqlite`, which won't start
+      without it) — never `/`.
 - [ ] `DROIDMCP_LOG_FORMAT=json` and the logs shipped somewhere
       durable.
-- [ ] `DROIDMCP_TERMUX_ALLOWLIST` set if you actually need
-      `mcp-termux`. Otherwise don't run it.
+- [ ] `DROIDMCP_TERMUX_ALLOWLIST` narrowed to the programs you need
+      (not `*`) if you run `mcp-termux` at all.
+- [ ] Tools you don't use switched off with
+      `DROIDMCP_<SERVER>_DISABLED_TOOLS` (e.g. `termux_sms_send`).
+- [ ] `DROIDMCP_<SERVER>_RATE_LIMITS` set for the costly tools you do
+      use (scans, ffmpeg, GitHub writes), and the 10/h SMS default kept
+      or lowered.
 - [ ] `DROIDMCP_SCRAPER_ALLOW_PRIVATE` / `_NETWORK_ALLOW_PUBLIC`
       left unset unless you understand the implications.
 - [ ] `GET /healthz` returns 200 from outside (e.g. a smoke check
       from your supervisor).
-- [ ] Binary verified against the published `SHA256SUMS` (and ideally
-      the cosign `.sig`/`.pem` for the release tag).
+- [ ] Binary verified against the published `SHA256SUMS`, and the
+      `SHA256SUMS` signature checked with cosign
+      ([how](#verifying-a-release)).
 
 In dev mode (loopback only, no key, plain HTTP) the scraper, network
 and clipboard servers are fine for experimentation — just understand

@@ -1,13 +1,23 @@
 package core
 
 import (
+	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/kahz12/droidmcp/internal/config"
+	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
@@ -299,5 +309,260 @@ func TestHostnameOnly(t *testing.T) {
 		if got := hostnameOnly(in); got != want {
 			t.Errorf("hostnameOnly(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestOriginGuard(t *testing.T) {
+	t.Setenv(envAllowedHosts, "mcp.example")
+	ds := newTestServer("")
+	h := buildHandler(ds, false, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	cases := []struct {
+		origin string
+		want   int
+	}{
+		{"", http.StatusOK}, // MCP clients outside a browser send no Origin
+		{"http://localhost:6274", http.StatusOK},
+		{"http://127.0.0.1:3000", http.StatusOK},
+		{"https://mcp.example", http.StatusOK},
+		{"https://evil.example", http.StatusForbidden},
+		{"http://localhost.evil.example", http.StatusForbidden},
+		{"null", http.StatusForbidden},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:3000/mcp", nil)
+		if c.origin != "" {
+			req.Header.Set("Origin", c.origin)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != c.want {
+			t.Errorf("Origin %q: got %d, want %d", c.origin, w.Code, c.want)
+		}
+	}
+}
+
+// newEchoServer returns a test server with one tool, echo, that returns its
+// text argument.
+func newEchoServer(apiKey string) *DroidServer {
+	ds := newTestServer(apiKey)
+	ds.MCPServer.AddTool(mcp.NewTool("echo",
+		mcp.WithString("text", mcp.Required()),
+	), func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText(req.GetString("text", "")), nil
+	})
+	return ds
+}
+
+// startHTTP serves ds through the production handler on a loopback listener
+// and returns its base URL. The listener is opened first so the SSE transport
+// can advertise the real address, as serveHTTP does.
+func startHTTP(t *testing.T, ds *DroidServer) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseURL := "http://" + ln.Addr().String()
+	srv := httptest.NewUnstartedServer(ds.httpHandler(baseURL, false))
+	_ = srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return baseURL
+}
+
+// initializeAndEcho runs the MCP handshake on c and one echo tools/call.
+func initializeAndEcho(t *testing.T, c *client.Client) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := c.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	var initReq mcp.InitializeRequest
+	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	initReq.Params.ClientInfo = mcp.Implementation{Name: "core-test", Version: "0"}
+	res, err := c.Initialize(ctx, initReq)
+	if err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	if res.ServerInfo.Name != "test" {
+		t.Errorf("server name: %q", res.ServerInfo.Name)
+	}
+
+	var call mcp.CallToolRequest
+	call.Params.Name = "echo"
+	call.Params.Arguments = map[string]any{"text": "hola"}
+	out, err := c.CallTool(ctx, call)
+	if err != nil {
+		t.Fatalf("tools/call: %v", err)
+	}
+	if len(out.Content) != 1 {
+		t.Fatalf("content: %+v", out.Content)
+	}
+	if text, ok := out.Content[0].(mcp.TextContent); !ok || text.Text != "hola" {
+		t.Errorf("echo returned %+v", out.Content[0])
+	}
+}
+
+func TestStreamableHTTPEndToEnd(t *testing.T) {
+	baseURL := startHTTP(t, newEchoServer("topsecret"))
+
+	// The key is enforced on /mcp like on the SSE routes.
+	resp, err := http.Post(baseURL+streamablePath, "application/json",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("unkeyed POST /mcp: got %d, want 401", resp.StatusCode)
+	}
+
+	c, err := client.NewStreamableHttpClient(baseURL+streamablePath,
+		transport.WithHTTPHeaders(map[string]string{authHeader: "topsecret"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	initializeAndEcho(t, c)
+}
+
+func TestLegacySSEEndToEnd(t *testing.T) {
+	baseURL := startHTTP(t, newEchoServer("topsecret"))
+
+	c, err := client.NewSSEMCPClient(baseURL+"/sse",
+		transport.WithHeaders(map[string]string{authHeader: "topsecret"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	initializeAndEcho(t, c)
+}
+
+// syncBuffer is an io.Writer safe for the stdio server's concurrent writers.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func TestStdioEndToEnd(t *testing.T) {
+	ds := newEchoServer("")
+	in := strings.NewReader(strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + mcp.LATEST_PROTOCOL_VERSION + `","capabilities":{},"clientInfo":{"name":"core-test","version":"0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hola"}}}`,
+	}, "\n") + "\n")
+	var out syncBuffer
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// End of input is the client going away: a clean stop once queued calls finish.
+	if err := ds.listenStdio(ctx, in, &out); err != nil {
+		t.Fatalf("listenStdio: %v", err)
+	}
+
+	responses := map[float64]map[string]any{}
+	sc := bufio.NewScanner(strings.NewReader(out.String()))
+	for sc.Scan() {
+		var msg map[string]any
+		if err := json.Unmarshal(sc.Bytes(), &msg); err != nil {
+			t.Fatalf("stdout carried a non-JSON line %q: %v", sc.Text(), err)
+		}
+		if id, ok := msg["id"].(float64); ok {
+			responses[id] = msg
+		}
+	}
+	if _, ok := responses[1]["result"]; !ok {
+		t.Errorf("initialize response: %+v", responses[1])
+	}
+	result, _ := responses[2]["result"].(map[string]any)
+	content, _ := result["content"].([]any)
+	if len(content) != 1 || content[0].(map[string]any)["text"] != "hola" {
+		t.Errorf("tools/call response: %+v", responses[2])
+	}
+}
+
+func TestStdioCancelIsCleanStop(t *testing.T) {
+	ds := newTestServer("")
+	in, w := io.Pipe()
+	defer w.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := ds.listenStdio(ctx, in, io.Discard); err != nil {
+		t.Errorf("a cancelled context should stop cleanly, got %v", err)
+	}
+}
+
+func TestDisableToolsRemovesThem(t *testing.T) {
+	ds := newEchoServer("")
+	ds.MCPServer.AddTool(mcp.NewTool("dangerous"),
+		func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			t.Fatal("a disabled tool must not run")
+			return nil, nil
+		})
+
+	if err := ds.disableTools(&config.Config{Server: "termux", DisabledTools: []string{"dangerous"}}); err != nil {
+		t.Fatal(err)
+	}
+	if ds.MCPServer.GetTool("dangerous") != nil {
+		t.Error("disabled tool is still registered")
+	}
+	if ds.MCPServer.GetTool("echo") == nil {
+		t.Error("a tool that was not listed was removed too")
+	}
+
+	// A client sees it neither in tools/list nor through tools/call.
+	in := strings.NewReader(strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + mcp.LATEST_PROTOCOL_VERSION + `","capabilities":{},"clientInfo":{"name":"core-test","version":"0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"dangerous","arguments":{}}}`,
+	}, "\n") + "\n")
+	var out syncBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := ds.listenStdio(ctx, in, &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), `"name":"dangerous"`) {
+		t.Errorf("tools/list still offers the disabled tool:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), `"id":3,"error"`) {
+		t.Errorf("calling the disabled tool should be a JSON-RPC error:\n%s", out.String())
+	}
+}
+
+func TestDisableToolsRejectsUnknownNames(t *testing.T) {
+	ds := newEchoServer("")
+	err := ds.disableTools(&config.Config{Server: "termux", DisabledTools: []string{"echo", "run_comand"}})
+	if err == nil {
+		t.Fatal("a misspelled tool name must stop the server, not be ignored")
+	}
+	for _, want := range []string{"DROIDMCP_TERMUX_DISABLED_TOOLS", "run_comand", "has: echo"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q: %v", want, err)
+		}
+	}
+	// Nothing is removed when the list is rejected.
+	if ds.MCPServer.GetTool("echo") == nil {
+		t.Error("echo was removed although the list was rejected")
 	}
 }

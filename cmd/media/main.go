@@ -36,7 +36,7 @@ var cfg *config.Config
 
 func main() {
 	var err error
-	cfg, err = config.LoadConfig()
+	cfg, err = config.LoadConfig("media")
 	if err != nil {
 		logger.Fatal("Failed to load config", err)
 	}
@@ -60,7 +60,8 @@ func main() {
 	// localhost (other apps, adb) could otherwise drive it. The API key is
 	// mandatory, as in mcp-filesystem and mcp-termux.
 	apiKey := config.ResolveAPIKey("media")
-	if apiKey == "" {
+	// Over stdio there is no listener, so only the launching process can reach it.
+	if apiKey == "" && !cfg.Stdio() {
 		logger.Log.Error("mcp-media requires DROIDMCP_MEDIA_KEY or DROIDMCP_API_KEY to be set. Refusing to start.")
 		os.Exit(1)
 	}
@@ -69,7 +70,7 @@ func main() {
 	server.APIKey = apiKey
 	registerTools(server)
 
-	if err := server.ServeSSE(cfg.Port); err != nil {
+	if err := server.Serve(cfg); err != nil {
 		logger.Fatal("Server failed", err)
 	}
 }

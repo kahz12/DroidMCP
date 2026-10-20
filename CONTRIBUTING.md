@@ -34,15 +34,19 @@ Useful targets: `make vet`, `make fmt` / `make fmt-check`, `make lint`
 (golangci-lint, config in `.golangci.yml`), `make sec` (gosec),
 `make build-arm64` (cross-compile via `scripts/build-arm64.sh`).
 
-CI runs **test + lint + gosec** on every push and PR; all three must be green.
+CI runs **test (plus an ARM64 cross-build) + lint + gosec + govulncheck** on
+every push and PR; all four must be green. Run `go run
+golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...` locally for the last one.
 
 ## Repository layout
 
 ```
 cmd/<server>/     one MCP server per directory (main.go registers tools)
-internal/core     shared HTTP/SSE server wrapper (auth, TLS, /healthz)
-internal/config   DROIDMCP_* environment configuration
+internal/core     shared server wrapper: Streamable HTTP + SSE + stdio (auth, TLS, /healthz)
+internal/config   DROIDMCP_* environment configuration, per-server default ports
 internal/logger   structured logging with secret redaction
+internal/pathsec  containment of caller paths in DROIDMCP_ROOT
+internal/phone    SMS recipient validation (mcp-sms, mcp-termux)
 internal/buildinfo  version stamped at build time
 ```
 
@@ -55,18 +59,25 @@ internal/buildinfo  version stamped at build time
    `mcp.NewToolResultError(...)` (never a Go error for expected failures) and
    marshal successful responses to JSON.
 3. Add unit tests covering the happy path and the error paths.
-4. Update the tool tables in `README.md`, `README.es.md`, and `ROADMAP.md`.
+4. Update the tool tables in `README.md`, `README.es.md`, and `ROADMAP.md`,
+   the tool reference in `docs/usage.md` and `docs/usage.es.md`, and add a line
+   to `CHANGELOG.md`.
 
 ## Adding a new server
 
 1. Create `cmd/<name>/main.go` following an existing server:
    `core.NewDroidServer("mcp-<name>", buildinfo.Version)`, resolve the API key
-   with `config.ResolveAPIKey("<name>")`, register tools, `ServeSSE(cfg.Port)`.
-2. Add the name to `SERVICES` in the `Makefile` and to
+   with `config.ResolveAPIKey("<name>")`, register tools, `server.Serve(cfg)`
+   (it picks HTTP or stdio from `DROIDMCP_TRANSPORT`).
+2. Give it a default port in `defaultPorts` (`internal/config/config.go`) —
+   a test fails for any `cmd/` directory without a unique one — and pass the
+   same name to `config.LoadConfig("<name>")`. Add the name to `SERVICES` in
+   the `Makefile` and to
    `scripts/build-arm64.sh`, plus the matrix in
    `.github/workflows/build.yml`.
 3. Decide the security posture: does it need a mandatory key like
-   `mcp-termux`/`mcp-filesystem`? Which `DROIDMCP_<NAME>_*` variables gate the
+   `mcp-termux`/`mcp-filesystem`? (Enforce it for the HTTP listener only —
+   `if apiKey == "" && !cfg.Stdio()` — since stdio has nothing to guard.) Which `DROIDMCP_<NAME>_*` variables gate the
    risky parts? Document them in `docs/security.md`.
 4. Document the server in both READMEs and the ROADMAP.
 
@@ -87,12 +98,8 @@ Looking for something to work on? Open phases and pending tasks live in
 
 ## Reporting security issues
 
-Please do **not** open a public issue for vulnerabilities. Use GitHub's
-[private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
-on this repository. Read `docs/security.md` for the threat model — reports
-about misconfigured deployments (e.g. no API key on a public interface) are
-out of scope, but anything that breaks a documented guarantee is very much in
-scope.
+Please do **not** open a public issue for vulnerabilities. The reporting
+process and what is in scope are in [SECURITY.md](SECURITY.md).
 
 ## License
 

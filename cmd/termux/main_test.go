@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kahz12/droidmcp/internal/core"
+	"github.com/kahz12/droidmcp/internal/logger"
+	"github.com/kahz12/droidmcp/internal/phone"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -35,7 +38,7 @@ func resultText(t *testing.T, res *mcp.CallToolResult) (string, bool) {
 
 func TestHandleRunCommandJSON(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 	res, err := handleRunCommand(context.Background(), callRequest(map[string]any{
 		"command": "/bin/sh",
 		"args":    []any{"-c", "echo hi"},
@@ -61,7 +64,7 @@ func TestHandleRunCommandJSON(t *testing.T) {
 
 func TestHandleRunCommandNonZeroIsErrorResult(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 	res, err := handleRunCommand(context.Background(), callRequest(map[string]any{
 		"command": "/bin/sh",
 		"args":    []any{"-c", "exit 5"},
@@ -83,7 +86,7 @@ func TestHandleRunCommandNonZeroIsErrorResult(t *testing.T) {
 }
 
 func TestHandleRunCommandMissingCommand(t *testing.T) {
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 	res, err := handleRunCommand(context.Background(), callRequest(map[string]any{}))
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +99,7 @@ func TestHandleRunCommandMissingCommand(t *testing.T) {
 
 func TestHandleRunCommandEnvExtraAndCwd(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 	dir := t.TempDir()
 	res, err := handleRunCommand(context.Background(), callRequest(map[string]any{
 		"command": "/bin/sh",
@@ -124,7 +127,7 @@ func TestHandleRunCommandEnvExtraAndCwd(t *testing.T) {
 
 func TestHandleRunCommandTimeoutCap(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 	res, err := handleRunCommand(context.Background(), callRequest(map[string]any{
 		"command":         "/bin/sh",
 		"args":            []any{"-c", "sleep 30"},
@@ -162,7 +165,7 @@ func TestHandleRunCommandAllowlistBlocks(t *testing.T) {
 }
 
 func TestHandleInstallPkgUsesDoubleDash(t *testing.T) {
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 	// The real `pkg` is not available here, so a shim earlier on PATH stands
 	// in for it and echoes the args it receives.
 	dir := t.TempDir()
@@ -246,6 +249,46 @@ func TestHandleReadEnvAll(t *testing.T) {
 	}
 }
 
+func TestHandleReadEnvRedactsCredentials(t *testing.T) {
+	t.Setenv("DROIDMCP_TERMUX_KEY", "hunter2")
+	t.Setenv("GITHUB_TOKEN", "ghp_secret")
+	t.Setenv("DROIDMCP_TEST_PLAIN", "visible")
+
+	res, err := handleReadEnv(context.Background(), callRequest(map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := resultText(t, res)
+	if strings.Contains(text, "hunter2") || strings.Contains(text, "ghp_secret") {
+		t.Fatalf("credential leaked in the env dump: %s", text)
+	}
+	var got envResult
+	if err := json.Unmarshal([]byte(text), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Vars["GITHUB_TOKEN"] != logger.RedactedMarker || got.Vars["DROIDMCP_TEST_PLAIN"] != "visible" {
+		t.Errorf("unexpected values: GITHUB_TOKEN=%q DROIDMCP_TEST_PLAIN=%q", got.Vars["GITHUB_TOKEN"], got.Vars["DROIDMCP_TEST_PLAIN"])
+	}
+	for _, name := range []string{"DROIDMCP_TERMUX_KEY", "GITHUB_TOKEN"} {
+		found := false
+		for _, r := range got.Redacted {
+			found = found || r == name
+		}
+		if !found {
+			t.Errorf("%s missing from redacted list %q", name, got.Redacted)
+		}
+	}
+
+	// Asking for one by name is redacted too.
+	res, err = handleReadEnv(context.Background(), callRequest(map[string]any{"name": "GITHUB_TOKEN"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := resultText(t, res); strings.Contains(text, "ghp_secret") {
+		t.Errorf("single lookup leaked the token: %s", text)
+	}
+}
+
 func TestStringMapArgDropsNonStrings(t *testing.T) {
 	got := stringMapArg(callRequest(map[string]any{
 		"env_extra": map[string]any{"A": "1", "B": 2, "C": "3"},
@@ -319,10 +362,10 @@ func TestTermuxAPIHandlersArgv(t *testing.T) {
 		{"tts defaults", handleTTSSpeak, map[string]any{"text": "hola"}, []string{"stdin:hola"}},
 		{"tts", handleTTSSpeak, map[string]any{"text": "-l xx", "language": "es-ES", "rate": 1.5, "pitch": 1.0},
 			[]string{"arg:-l", "arg:es-ES", "arg:-r", "arg:1.5", "arg:-p", "arg:1", "stdin:-l xx"}},
-		// The message body follows `--`, so a body that looks like a flag is
-		// still the body.
-		{"sms", handleSMSSend, map[string]any{"number": "+34600000000", "text": "--help me"},
-			[]string{"arg:-n", "arg:+34600000000", "arg:--", "arg:--help me", "stdin:"}},
+		// The message body travels on stdin, as in mcp-sms, so a body that
+		// looks like a flag is still the body; recipients come back cleaned.
+		{"sms", handleSMSSend, map[string]any{"number": " +34600000000, 600111222", "text": "--help me"},
+			[]string{"arg:-n", "arg:+34600000000,600111222", "stdin:--help me"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -352,10 +395,16 @@ func TestTermuxAPIHandlersRequireArgs(t *testing.T) {
 		handler termuxHandler
 		args    map[string]any
 	}{
-		"toast without text": {handleToast, nil},
-		"sms without number": {handleSMSSend, map[string]any{"text": "hi"}},
-		"sms without text":   {handleSMSSend, map[string]any{"number": "123"}},
-		"tts without text":   {handleTTSSpeak, map[string]any{"language": "es-ES"}},
+		"toast without text":  {handleToast, nil},
+		"sms without number":  {handleSMSSend, map[string]any{"text": "hi"}},
+		"sms without text":    {handleSMSSend, map[string]any{"number": "123"}},
+		"sms with blank text": {handleSMSSend, map[string]any{"number": "123", "text": "  "}},
+		// Recipients get the same validation as mcp-sms: an option-like or
+		// space-split "number" never reaches termux-sms-send.
+		"sms with option-like number": {handleSMSSend, map[string]any{"number": "-s", "text": "hi"}},
+		"sms with spaced number":      {handleSMSSend, map[string]any{"number": "600 111 222", "text": "hi"}},
+		"sms with a name":             {handleSMSSend, map[string]any{"number": "mom", "text": "hi"}},
+		"tts without text":            {handleTTSSpeak, map[string]any{"language": "es-ES"}},
 	} {
 		res, err := tc.handler(context.Background(), callRequest(tc.args))
 		if err != nil {
@@ -382,5 +431,26 @@ func TestTermuxAPIHandlerFailureIsErrorResult(t *testing.T) {
 	var got execResult
 	if err := json.Unmarshal([]byte(text), &got); err != nil || got.ExitCode != 3 {
 		t.Fatalf("exit code not reported: %+v %v", got, err)
+	}
+}
+
+// SMS sending is rate limited out of the box. The limit must name a tool this
+// server registers — core refuses to start on a built-in limit for a missing
+// tool, so a rename would otherwise surface only at startup — and use the
+// shared SMS policy.
+func TestDefaultRateLimitsCoverSMSSending(t *testing.T) {
+	s := core.NewDroidServer("mcp-termux", "test")
+	registerTools(s)
+	limit, ok := defaultRateLimits["termux_sms_send"]
+	if !ok {
+		t.Fatal("termux_sms_send must have a built-in rate limit")
+	}
+	if limit != phone.SendLimit {
+		t.Errorf("termux_sms_send limit %v, want the shared %v", limit, phone.SendLimit)
+	}
+	for name := range defaultRateLimits {
+		if s.MCPServer.GetTool(name) == nil {
+			t.Errorf("built-in rate limit for unregistered tool %q", name)
+		}
 	}
 }

@@ -162,17 +162,35 @@ func runCommand(ctx context.Context, opts execOptions) (*execResult, error) {
 	return res, nil
 }
 
-// allowlistCheck returns nil if the command is permitted under
-// DROIDMCP_TERMUX_ALLOWLIST. An empty/unset env var means "allow all"
-// (the unrestricted default). Comparison is on the command's basename
-// so callers can pass either "ls" or "/usr/bin/ls".
-func allowlistCheck(command string) error {
-	raw := strings.TrimSpace(os.Getenv(allowlistEnv))
-	if raw == "" {
-		return nil
+// allowAll is the DROIDMCP_TERMUX_ALLOWLIST value that explicitly lets
+// run_command start any program.
+const allowAll = "*"
+
+// checkAllowlistConfig validates DROIDMCP_TERMUX_ALLOWLIST at startup and
+// reports whether it opts into an unrestricted run_command. There is no
+// allow-all default: the variable must list commands, or be exactly "*".
+func checkAllowlistConfig(raw string) (unrestricted bool, err error) {
+	entries := parseAllowlist(raw)
+	if len(entries) == 0 {
+		return false, fmt.Errorf("%s is not set: list the commands run_command may start (e.g. \"ls,cat,git\"), set it to %q to allow any command, or disable run_command with DROIDMCP_TERMUX_DISABLED_TOOLS=run_command", allowlistEnv, allowAll)
 	}
-	allowed := parseAllowlist(raw)
-	if len(allowed) == 0 {
+	if _, ok := entries[allowAll]; ok {
+		if len(entries) > 1 {
+			return false, fmt.Errorf("%s: %q allows every command, so it must be the only entry", allowlistEnv, allowAll)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// allowlistCheck returns nil if the command is permitted under
+// DROIDMCP_TERMUX_ALLOWLIST: listed by full command or by basename (so callers
+// can pass either "ls" or "/usr/bin/ls"), or the list is "*". An empty list
+// permits nothing; main refuses to start that way while run_command is
+// enabled, and the check stays closed regardless.
+func allowlistCheck(command string) error {
+	allowed := parseAllowlist(os.Getenv(allowlistEnv))
+	if _, ok := allowed[allowAll]; ok {
 		return nil
 	}
 	base := filepath.Base(command)

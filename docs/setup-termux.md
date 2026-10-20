@@ -24,9 +24,11 @@ DroidMCP itself only needs Go and Make to build:
 pkg install golang git make
 ```
 
-The `mcp-clipboard` and the wrapper tools of `mcp-termux` (battery,
-location, notifications, toast, sms, tts) additionally require the
-`termux-api` package **and** the companion Android app.
+The servers built on Termux:API — `mcp-clipboard`, `mcp-sensors`,
+`mcp-notifications`, `mcp-contacts`, `mcp-sms`, and the wrapper tools of
+`mcp-termux` (battery, location, notifications, toast, sms, tts) —
+additionally require the `termux-api` package **and** the companion
+Android app.
 
 ```bash
 # 1. In Termux:
@@ -69,7 +71,7 @@ minimum you should set:
 
 | Variable | Why |
 |----------|-----|
-| `DROIDMCP_PORT` | Each server you run needs its own port. |
+| `DROIDMCP_PORT` | Optional: every server has its own default port (`3000`–`3013`); set it only to move one. |
 | `DROIDMCP_ROOT` | The default `/` is **insecure** — override to a real directory. `filesystem`, `media` and `sqlite` refuse to start with `/`. |
 | `DROIDMCP_API_KEY` (or per-server) | Required as soon as the listener is reachable from anything but `localhost`. |
 | `GITHUB_TOKEN` | Required to run `mcp-github`. |
@@ -111,34 +113,42 @@ curl -fsS http://localhost:3000/healthz
 
 ## Connecting MCP clients
 
-The endpoint each client should hit is `http://localhost:<port>/sse`
-(or `https://` once you configure `DROIDMCP_TLS_CERT` / `_KEY`). When
-auth is enabled, clients must send the key in the `X-DroidMCP-Key`
-header:
+The endpoint each client should hit is `http://localhost:<port>/mcp`
+(Streamable HTTP; `https://` once you configure `DROIDMCP_TLS_CERT` /
+`_KEY`). Clients that only speak the older SSE transport use `/sse` on
+the same port. When auth is enabled, clients must send the key in the
+`X-DroidMCP-Key` header:
 
-```jsonc
-// ~/.claude/settings.json
-{
-  "mcpServers": {
-    "filesystem": {
-      "type": "sse",
-      "url": "http://localhost:3000/sse",
-      "headers": { "X-DroidMCP-Key": "<paste-DROIDMCP_API_KEY>" }
-    }
-  }
-}
+```bash
+claude mcp add --transport http --scope user filesystem http://localhost:3000/mcp \
+  --header "X-DroidMCP-Key: $DROIDMCP_API_KEY"
 ```
+
+If the client itself runs in Termux, stdio is simpler: no port, no key
+and no server to keep running — the client launches the binary.
+
+```bash
+claude mcp add --env DROIDMCP_TRANSPORT=stdio --env DROIDMCP_ROOT="$HOME/workspace" \
+  --transport stdio --scope user filesystem -- droidmcp-filesystem
+```
+
+Gemini CLI configuration and the project-scoped `.mcp.json` form are in
+the [usage guide](usage.md#talking-to-a-server).
 
 ## Security
 
-DroidMCP servers default to listening on the loopback interface and to
-**dev mode** (no API key) for ergonomics. The moment the listener can
+DroidMCP servers always listen on the loopback interface. The
+low-privilege ones default to **dev mode** (no API key) for ergonomics;
+`filesystem`, `termux`, `media`, `sqlite`, `github`, `sms` and
+`automation` refuse to listen without a key. The moment the listener can
 be reached from anything other than the local device, you need:
 
 - a strong `DROIDMCP_API_KEY` (or per-server `DROIDMCP_<NAME>_KEY`),
 - TLS via `DROIDMCP_TLS_CERT` / `DROIDMCP_TLS_KEY`,
-- an explicit `DROIDMCP_ROOT` for `mcp-filesystem` (not `/`),
-- and a `DROIDMCP_TERMUX_ALLOWLIST` if you run `mcp-termux`.
+- an explicit `DROIDMCP_ROOT` for `mcp-filesystem`, `mcp-media` and
+  `mcp-sqlite` (not `/` — they refuse it),
+- and a `DROIDMCP_TERMUX_ALLOWLIST` narrower than `*` if you run
+  `mcp-termux` (it is mandatory either way).
 
 The full checklist is in [`security.md`](security.md#production-checklist).
 **Never expose these ports to external networks without working through

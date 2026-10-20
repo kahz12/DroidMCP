@@ -32,7 +32,7 @@ const tokenStartupTimeout = 10 * time.Second
 
 func main() {
 	var err error
-	cfg, err = config.LoadConfig()
+	cfg, err = config.LoadConfig("github")
 	if err != nil {
 		logger.Fatal("Failed to load config", err)
 	}
@@ -61,7 +61,8 @@ func main() {
 	// localhost (other apps, adb) could otherwise operate GitHub as the user.
 	// The API key is mandatory, as in mcp-filesystem / mcp-termux.
 	apiKey := config.ResolveAPIKey("github")
-	if apiKey == "" {
+	// Over stdio there is no listener, so only the launching process can reach it.
+	if apiKey == "" && !cfg.Stdio() {
 		logger.Log.Error("mcp-github holds a GitHub token with full API access; refusing to start without DROIDMCP_GITHUB_KEY or DROIDMCP_API_KEY.")
 		os.Exit(1)
 	}
@@ -70,7 +71,7 @@ func main() {
 	server.APIKey = apiKey
 	registerTools(server)
 
-	if err := server.ServeSSE(cfg.Port); err != nil {
+	if err := server.Serve(cfg); err != nil {
 		logger.Fatal("Server failed", err)
 	}
 }

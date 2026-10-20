@@ -1,20 +1,23 @@
 // Command termux provides an MCP server for native Android/Termux interaction.
-// Every tool routes through runCommand (exec.go) which enforces an optional
-// allowlist (DROIDMCP_TERMUX_ALLOWLIST), per-call timeouts, byte caps on
-// stdout/stderr, and SIGTERM-on-cancel.
+// Every tool routes through runCommand (exec.go) which enforces the
+// run_command allowlist (DROIDMCP_TERMUX_ALLOWLIST, mandatory), per-call
+// timeouts, byte caps on stdout/stderr, and SIGTERM-on-cancel.
 package main
 
 import (
 	"context"
 	"encoding/json"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kahz12/droidmcp/internal/buildinfo"
 	"github.com/kahz12/droidmcp/internal/config"
 	"github.com/kahz12/droidmcp/internal/core"
 	"github.com/kahz12/droidmcp/internal/logger"
+	"github.com/kahz12/droidmcp/internal/phone"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -22,7 +25,7 @@ var cfg *config.Config
 
 func main() {
 	var err error
-	cfg, err = config.LoadConfig()
+	cfg, err = config.LoadConfig("termux")
 	if err != nil {
 		logger.Fatal("Failed to load config", err)
 	}
@@ -31,19 +34,39 @@ func main() {
 	// the host. Refuse to start without an API key so anything else on
 	// localhost (other apps, adb) cannot just connect.
 	apiKey := config.ResolveAPIKey("termux")
-	if apiKey == "" {
+	// Over stdio there is no listener, so only the launching process can reach it.
+	if apiKey == "" && !cfg.Stdio() {
 		logger.Log.Error("mcp-termux requires DROIDMCP_TERMUX_KEY or DROIDMCP_API_KEY to be set. Refusing to start.")
 		os.Exit(1)
 	}
 
+	// run_command is a shell, so there is no allow-all default: the operator
+	// lists the programs it may start, or opts into all of them with "*".
+	// Nothing to check when run_command is switched off.
+	if !cfg.ToolDisabled("run_command") {
+		unrestricted, err := checkAllowlistConfig(os.Getenv(allowlistEnv))
+		if err != nil {
+			logger.Log.Error("mcp-termux: " + err.Error() + ". Refusing to start.")
+			os.Exit(1)
+		}
+		if unrestricted {
+			logger.Log.Warn("mcp-termux: " + allowlistEnv + "=* lets run_command start any program")
+		}
+	}
+
 	server := core.NewDroidServer("mcp-termux", buildinfo.Version)
 	server.APIKey = apiKey
+	server.DefaultRateLimits = defaultRateLimits
 	registerTools(server)
 
-	if err := server.ServeSSE(cfg.Port); err != nil {
+	if err := server.Serve(cfg); err != nil {
 		logger.Fatal("Server failed", err)
 	}
 }
+
+// defaultRateLimits caps termux_sms_send like mcp-sms's send_sms, unless
+// DROIDMCP_TERMUX_RATE_LIMITS says otherwise.
+var defaultRateLimits = map[string]config.RateLimit{"termux_sms_send": phone.SendLimit}
 
 func registerTools(s *core.DroidServer) {
 	addTool := func(t mcp.Tool, h func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)) {
@@ -72,7 +95,7 @@ func registerTools(s *core.DroidServer) {
 	), handleListPkgs)
 
 	addTool(mcp.NewTool("read_env",
-		mcp.WithDescription("Read environment variables. Returns JSON {name, value} or {vars: {...}} when no name is given."),
+		mcp.WithDescription("Read environment variables. Returns JSON {name, value} or {vars: {...}} when no name is given. Values of variables whose names look like credentials (containing TOKEN, SECRET, PASSWORD, API_KEY, or KEY as a word) are replaced with \"[REDACTED]\" and their names listed in `redacted`."),
 		mcp.WithString("name", mcp.Description("Name of the environment variable. If empty, lists all")),
 	), handleReadEnv)
 
@@ -83,7 +106,8 @@ func registerTools(s *core.DroidServer) {
 
 	// termux-api wrappers. These bypass the allowlist because the operator
 	// already opted into them by deploying mcp-termux; the allowlist's job
-	// is to limit the *generic* shell, not the dedicated tools.
+	// is to limit the *generic* shell, not the dedicated tools. Operators
+	// switch individual ones off with DROIDMCP_TERMUX_DISABLED_TOOLS.
 	addTool(mcp.NewTool("termux_battery_status",
 		mcp.WithDescription("Get battery status (level, plugged, health)"),
 		mcp.WithNumber("timeout_seconds", mcp.Description("Per-call timeout")),
@@ -109,8 +133,8 @@ func registerTools(s *core.DroidServer) {
 	), handleToast)
 
 	addTool(mcp.NewTool("termux_sms_send",
-		mcp.WithDescription("Send an SMS. Requires SMS permission for Termux:API."),
-		mcp.WithString("number", mcp.Required(), mcp.Description("Recipient phone number")),
+		mcp.WithDescription("Send a real SMS. Requires SMS permission for Termux:API."),
+		mcp.WithString("number", mcp.Required(), mcp.Description("Recipient phone number(s): digits with an optional leading +, comma-separated")),
 		mcp.WithString("text", mcp.Required(), mcp.Description("Message body")),
 	), handleSMSSend)
 
@@ -161,28 +185,44 @@ func handleListPkgs(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 }
 
 // envResult is the JSON shape for read_env. Either Name+Value (single
-// lookup) or Vars (full dump) is populated.
+// lookup) or Vars (full dump) is populated; Redacted names the variables whose
+// values were withheld.
 type envResult struct {
-	Name  string            `json:"name,omitempty"`
-	Value string            `json:"value,omitempty"`
-	Vars  map[string]string `json:"vars,omitempty"`
+	Name     string            `json:"name,omitempty"`
+	Value    string            `json:"value,omitempty"`
+	Vars     map[string]string `json:"vars,omitempty"`
+	Redacted []string          `json:"redacted,omitempty"`
 }
 
+// handleReadEnv returns environment variables, withholding the values of those
+// whose names look like credentials (the logger's rule). The server's own
+// environment typically holds DROIDMCP_*_KEY and tokens such as GITHUB_TOKEN;
+// handing them to the calling model would let a prompt injection exfiltrate
+// them.
 func handleReadEnv(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name := req.GetString("name", "")
 	if name != "" {
-		return jsonResult(envResult{Name: name, Value: os.Getenv(name)})
-	}
-	all := make(map[string]string, len(os.Environ()))
-	for _, e := range os.Environ() {
-		for i := 0; i < len(e); i++ {
-			if e[i] == '=' {
-				all[e[:i]] = e[i+1:]
-				break
-			}
+		res := envResult{Name: name, Value: os.Getenv(name)}
+		if res.Value != "" && logger.IsSensitiveKey(name) {
+			res.Value = logger.RedactedMarker
+			res.Redacted = []string{name}
 		}
+		return jsonResult(res)
 	}
-	return jsonResult(envResult{Vars: all})
+	res := envResult{Vars: make(map[string]string, len(os.Environ()))}
+	for _, e := range os.Environ() {
+		k, v, ok := strings.Cut(e, "=")
+		if !ok {
+			continue
+		}
+		if v != "" && logger.IsSensitiveKey(k) {
+			v = logger.RedactedMarker
+			res.Redacted = append(res.Redacted, k)
+		}
+		res.Vars[k] = v
+	}
+	sort.Strings(res.Redacted)
+	return jsonResult(res)
 }
 
 func handleBatteryStatus(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -244,15 +284,24 @@ func handleSMSSend(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	recipients, _, err := phone.ParseRecipients(number)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	text, err := req.RequireString("text")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	// `--` separates flags from the recipient list to neutralise any
-	// number that starts with `-`.
+	if strings.TrimSpace(text) == "" {
+		return mcp.NewToolResultError("`text` must not be empty"), nil
+	}
+	// Same contract as mcp-sms: the recipients are validated phone numbers in
+	// one argv element, and the body goes on stdin, so it never reaches the
+	// command line where it could be parsed as an option.
 	return runAndRender(ctx, execOptions{
 		Command: "termux-sms-send",
-		Args:    []string{"-n", number, "--", text},
+		Args:    []string{"-n", recipients},
+		Stdin:   text,
 		Trusted: true,
 	})
 }

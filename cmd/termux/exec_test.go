@@ -22,7 +22,7 @@ func requireSh(t *testing.T) {
 
 func TestRunCommandCapturesStdoutStderr(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 
 	res, err := runCommand(context.Background(), execOptions{
 		Command: "/bin/sh",
@@ -47,7 +47,7 @@ func TestRunCommandCapturesStdoutStderr(t *testing.T) {
 
 func TestRunCommandRejectsLinkerEnvExtra(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 
 	for _, key := range []string{"LD_PRELOAD", "LD_LIBRARY_PATH", "ld_preload", "DYLD_INSERT_LIBRARIES"} {
 		_, err := runCommand(context.Background(), execOptions{
@@ -63,7 +63,7 @@ func TestRunCommandRejectsLinkerEnvExtra(t *testing.T) {
 
 func TestRunCommandAllowsBenignEnvExtra(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 
 	res, err := runCommand(context.Background(), execOptions{
 		Command:  "/bin/sh",
@@ -80,7 +80,7 @@ func TestRunCommandAllowsBenignEnvExtra(t *testing.T) {
 
 func TestRunCommandTrustedSkipsEnvExtraCheck(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 
 	// Trusted internal callers (the termux-* wrappers) are not caller-driven, so
 	// the linker-env guard does not apply to them.
@@ -109,7 +109,7 @@ func TestCheckEnvExtra(t *testing.T) {
 
 func TestRunCommandPropagatesNonZeroExit(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 
 	res, err := runCommand(context.Background(), execOptions{
 		Command: "/bin/sh",
@@ -125,7 +125,7 @@ func TestRunCommandPropagatesNonZeroExit(t *testing.T) {
 
 func TestRunCommandTimeout(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 
 	start := time.Now()
 	res, err := runCommand(context.Background(), execOptions{
@@ -146,7 +146,7 @@ func TestRunCommandTimeout(t *testing.T) {
 
 func TestRunCommandPanicButtonOnCancel(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -173,7 +173,7 @@ func TestRunCommandPanicButtonOnCancel(t *testing.T) {
 
 func TestRunCommandAppliesCwd(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 	dir := t.TempDir()
 
 	res, err := runCommand(context.Background(), execOptions{
@@ -193,7 +193,7 @@ func TestRunCommandAppliesCwd(t *testing.T) {
 }
 
 func TestRunCommandRejectsBadCwd(t *testing.T) {
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 	_, err := runCommand(context.Background(), execOptions{
 		Command: "/bin/sh",
 		Args:    []string{"-c", "true"},
@@ -206,7 +206,7 @@ func TestRunCommandRejectsBadCwd(t *testing.T) {
 
 func TestRunCommandPassesEnvExtra(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 
 	res, err := runCommand(context.Background(), execOptions{
 		Command:  "/bin/sh",
@@ -252,11 +252,54 @@ func TestRunCommandAllowlistAcceptsBasename(t *testing.T) {
 	}
 }
 
-func TestRunCommandAllowlistEmptyMeansAllow(t *testing.T) {
-	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+func TestAllowlistStarPermitsEverything(t *testing.T) {
+	t.Setenv(allowlistEnv, " * ")
 	if err := allowlistCheck("anything-at-all"); err != nil {
-		t.Fatalf("expected empty allowlist to permit everything, got %v", err)
+		t.Fatalf("expected %q to permit everything, got %v", allowAll, err)
+	}
+}
+
+// An unset or empty allowlist permits nothing: allow-all has to be asked for.
+func TestAllowlistEmptyPermitsNothing(t *testing.T) {
+	for _, raw := range []string{"", "  ", ",,"} {
+		t.Setenv(allowlistEnv, raw)
+		if err := allowlistCheck("ls"); err == nil {
+			t.Errorf("allowlist %q should not permit ls", raw)
+		}
+	}
+}
+
+func TestCheckAllowlistConfig(t *testing.T) {
+	cases := []struct {
+		raw          string
+		unrestricted bool
+		wantErr      string
+	}{
+		{"", false, "is not set"},
+		{" , ", false, "is not set"},
+		{"ls,git", false, ""},
+		{"*", true, ""},
+		{" * ", true, ""},
+		{"*,ls", false, "only entry"},
+	}
+	for _, c := range cases {
+		unrestricted, err := checkAllowlistConfig(c.raw)
+		if c.wantErr == "" {
+			if err != nil || unrestricted != c.unrestricted {
+				t.Errorf("%q: got (%v, %v), want (%v, nil)", c.raw, unrestricted, err, c.unrestricted)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+			t.Errorf("%q: got %v, want an error containing %q", c.raw, err, c.wantErr)
+		}
+	}
+	// The startup error tells the operator every way out.
+	_, err := checkAllowlistConfig("")
+	for _, hint := range []string{allowlistEnv, `"*"`, "DROIDMCP_TERMUX_DISABLED_TOOLS=run_command"} {
+		if !strings.Contains(err.Error(), hint) {
+			t.Errorf("startup error should mention %s: %v", hint, err)
+		}
 	}
 }
 
@@ -284,7 +327,7 @@ func TestRunCommandRejectsEmptyCommand(t *testing.T) {
 }
 
 func TestRunCommandUnknownBinary(t *testing.T) {
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 	res, err := runCommand(context.Background(), execOptions{
 		Command: "/bin/this-binary-does-not-exist-droidmcp",
 	})
@@ -342,7 +385,7 @@ func TestParseAllowlistTrimsAndDedupes(t *testing.T) {
 
 func TestRunCommandTruncatesLargeOutput(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 	// Print ~16 KiB of "x" with a 1 KiB cap.
 	res, err := runCommand(context.Background(), execOptions{
 		Command:  "/bin/sh",
@@ -363,7 +406,7 @@ func TestRunCommandTruncatesLargeOutput(t *testing.T) {
 // Sanity: errors.As on exec.ExitError works as expected.
 func TestExitErrorIsExecExitError(t *testing.T) {
 	requireSh(t)
-	t.Setenv(allowlistEnv, "")
+	t.Setenv(allowlistEnv, allowAll)
 	res, err := runCommand(context.Background(), execOptions{
 		Command: "/bin/sh",
 		Args:    []string{"-c", "exit 3"},

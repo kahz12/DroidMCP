@@ -3,13 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/kahz12/droidmcp/internal/phone"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -27,12 +26,6 @@ var validSMSTypes = map[string]bool{
 	"all": true, "inbox": true, "sent": true, "draft": true,
 	"outbox": true, "failed": true, "queued": true,
 }
-
-// phoneRe accepts a bare phone number: an optional leading + and at least
-// three digits, nothing else. Rejecting spaces and punctuation keeps a
-// recipient from being split by termux-sms-send's unquoted expansion and blocks
-// any attempt to smuggle option-like tokens into the recipient list.
-var phoneRe = regexp.MustCompile(`^\+?[0-9]{3,}$`)
 
 func handleListSMS(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	smsType := strings.ToLower(strings.TrimSpace(req.GetString("type", "all")))
@@ -109,7 +102,7 @@ func handleSendSMS(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 	if raw == "" {
 		return mcp.NewToolResultError("`number` is required (one or more recipients, comma-separated)"), nil
 	}
-	joined, nums, err := parseRecipients(raw)
+	joined, nums, err := phone.ParseRecipients(raw)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -155,26 +148,6 @@ func handleSendSMS(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 // is attacker-controlled free text.
 func listArgs(smsType string, limit, offset int) []string {
 	return []string{"-t", smsType, "-l", strconv.Itoa(limit), "-o", strconv.Itoa(offset)}
-}
-
-// parseRecipients splits a comma-separated recipient string, validates each as
-// a phone number, and returns the cleaned comma-joined form plus the slice.
-func parseRecipients(raw string) (string, []string, error) {
-	var nums []string
-	for _, p := range strings.Split(raw, ",") {
-		n := strings.TrimSpace(p)
-		if n == "" {
-			continue
-		}
-		if !phoneRe.MatchString(n) {
-			return "", nil, fmt.Errorf("invalid recipient number %q: expected digits with an optional leading +, comma-separated", n)
-		}
-		nums = append(nums, n)
-	}
-	if len(nums) == 0 {
-		return "", nil, errors.New("`number` must contain at least one recipient")
-	}
-	return strings.Join(nums, ","), nums, nil
 }
 
 // parseMessages decodes the termux-sms-list JSON array. Records are kept as
