@@ -2,15 +2,14 @@ package core
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -444,58 +443,78 @@ func TestLegacySSEEndToEnd(t *testing.T) {
 	initializeAndEcho(t, c)
 }
 
-// syncBuffer is an io.Writer safe for the stdio server's concurrent writers.
-type syncBuffer struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (s *syncBuffer) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.Write(p)
-}
-
-func (s *syncBuffer) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.String()
-}
-
-func TestStdioEndToEnd(t *testing.T) {
-	ds := newEchoServer("")
-	in := strings.NewReader(strings.Join([]string{
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + mcp.LATEST_PROTOCOL_VERSION + `","capabilities":{},"clientInfo":{"name":"core-test","version":"0"}}}`,
-		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hola"}}}`,
-	}, "\n") + "\n")
-	var out syncBuffer
-
+// stdioSession drives ds over stdio the way a client does: it sends
+// initialize, then requests (each must carry a unique, non-zero id), reads
+// until every one has its reply, and only then closes stdin. A client that
+// closes stdin is gone, and from mcp-go v1 on the server cancels — and may
+// drop — whatever is still queued at that point, so hanging up early would
+// race the replies. It returns the replies to requests, by id.
+func stdioSession(t *testing.T, ds *DroidServer, requests ...string) map[float64]map[string]any {
+	t.Helper()
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// End of input is the client going away: a clean stop once queued calls finish.
-	if err := ds.listenStdio(ctx, in, &out); err != nil {
-		t.Fatalf("listenStdio: %v", err)
-	}
 
-	responses := map[float64]map[string]any{}
-	sc := bufio.NewScanner(strings.NewReader(out.String()))
-	for sc.Scan() {
+	served := make(chan error, 1)
+	go func() {
+		served <- ds.listenStdio(ctx, inR, outW)
+		_ = outW.Close()
+	}()
+	// A reply that never comes fails the test instead of hanging it.
+	timer := time.AfterFunc(10*time.Second, func() {
+		_ = outR.CloseWithError(errors.New("timed out waiting for replies"))
+	})
+	defer timer.Stop()
+
+	messages := append([]string{
+		`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"` + mcp.LATEST_PROTOCOL_VERSION + `","capabilities":{},"clientInfo":{"name":"core-test","version":"0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+	}, requests...)
+	go func() {
+		for _, m := range messages {
+			if _, err := io.WriteString(inW, m+"\n"); err != nil {
+				return
+			}
+		}
+	}()
+
+	want := len(requests) + 1 // initialize is answered too
+	replies := map[float64]map[string]any{}
+	sc := bufio.NewScanner(outR)
+	for len(replies) < want && sc.Scan() {
 		var msg map[string]any
 		if err := json.Unmarshal(sc.Bytes(), &msg); err != nil {
 			t.Fatalf("stdout carried a non-JSON line %q: %v", sc.Text(), err)
 		}
 		if id, ok := msg["id"].(float64); ok {
-			responses[id] = msg
+			replies[id] = msg
 		}
 	}
-	if _, ok := responses[1]["result"]; !ok {
-		t.Errorf("initialize response: %+v", responses[1])
+	if len(replies) < want {
+		t.Fatalf("got %d of %d replies: %v", len(replies), want, sc.Err())
 	}
-	result, _ := responses[2]["result"].(map[string]any)
+	if _, ok := replies[0]["result"]; !ok {
+		t.Fatalf("initialize failed: %+v", replies[0])
+	}
+
+	// Hang up, as a client does, and let the server wind down.
+	_ = inW.Close()
+	go func() { _, _ = io.Copy(io.Discard, outR) }()
+	if err := <-served; err != nil {
+		t.Fatalf("listenStdio: %v", err)
+	}
+	delete(replies, 0)
+	return replies
+}
+
+func TestStdioEndToEnd(t *testing.T) {
+	replies := stdioSession(t, newEchoServer(""),
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hola"}}}`)
+	result, _ := replies[2]["result"].(map[string]any)
 	content, _ := result["content"].([]any)
 	if len(content) != 1 || content[0].(map[string]any)["text"] != "hola" {
-		t.Errorf("tools/call response: %+v", responses[2])
+		t.Errorf("tools/call response: %+v", replies[2])
 	}
 }
 
@@ -530,23 +549,14 @@ func TestDisableToolsRemovesThem(t *testing.T) {
 	}
 
 	// A client sees it neither in tools/list nor through tools/call.
-	in := strings.NewReader(strings.Join([]string{
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + mcp.LATEST_PROTOCOL_VERSION + `","capabilities":{},"clientInfo":{"name":"core-test","version":"0"}}}`,
-		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+	replies := stdioSession(t, ds,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
-		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"dangerous","arguments":{}}}`,
-	}, "\n") + "\n")
-	var out syncBuffer
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := ds.listenStdio(ctx, in, &out); err != nil {
-		t.Fatal(err)
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"dangerous","arguments":{}}}`)
+	if listed, _ := json.Marshal(replies[2]); strings.Contains(string(listed), `"name":"dangerous"`) {
+		t.Errorf("tools/list still offers the disabled tool: %s", listed)
 	}
-	if strings.Contains(out.String(), `"name":"dangerous"`) {
-		t.Errorf("tools/list still offers the disabled tool:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), `"id":3,"error"`) {
-		t.Errorf("calling the disabled tool should be a JSON-RPC error:\n%s", out.String())
+	if _, isErr := replies[3]["error"]; !isErr {
+		t.Errorf("calling the disabled tool should be a JSON-RPC error: %+v", replies[3])
 	}
 }
 

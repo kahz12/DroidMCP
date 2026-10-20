@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -151,34 +152,17 @@ func TestApplyRateLimitsRejectsUnknownTools(t *testing.T) {
 }
 
 // callEchoTwice calls echo once in each of two stdio sessions on ds — they share
-// its limiter — and returns each session's raw output.
+// its limiter — and returns each reply as JSON.
 func callEchoTwice(t *testing.T, ds *DroidServer) [2]string {
 	t.Helper()
-	call := func(id string) string {
-		return `{"jsonrpc":"2.0","id":` + id + `,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hola"}}}`
+	var out [2]string
+	for i := range out {
+		replies := stdioSession(t, ds,
+			`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hola"}}}`)
+		reply, _ := json.Marshal(replies[1])
+		out[i] = string(reply)
 	}
-	in := strings.NewReader(strings.Join([]string{
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + mcp.LATEST_PROTOCOL_VERSION + `","capabilities":{},"clientInfo":{"name":"core-test","version":"0"}}}`,
-		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
-		call("2"),
-	}, "\n") + "\n")
-	var out syncBuffer
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := ds.listenStdio(ctx, in, &out); err != nil {
-		t.Fatal(err)
-	}
-	// A second session on the same server shares the limiter.
-	in2 := strings.NewReader(strings.Join([]string{
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + mcp.LATEST_PROTOCOL_VERSION + `","capabilities":{},"clientInfo":{"name":"core-test","version":"0"}}}`,
-		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
-		call("3"),
-	}, "\n") + "\n")
-	var out2 syncBuffer
-	if err := ds.listenStdio(ctx, in2, &out2); err != nil {
-		t.Fatal(err)
-	}
-	return [2]string{out.String(), out2.String()}
+	return out
 }
 
 func TestRateLimitEndToEnd(t *testing.T) {
