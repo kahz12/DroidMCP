@@ -1,5 +1,7 @@
 #!/bin/bash
-# Reproducible ARM64 build for all DroidMCP MCP servers. Flags match
+# Reproducible android/arm64 build for all DroidMCP MCP servers. GOOS=android,
+# not linux: Android's seccomp filter kills an app that calls faccessat2, which
+# a linux build's os/exec.LookPath does. Flags match
 # .github/workflows/build.yml and the Makefile so local, CI and release
 # binaries are byte-identical when produced from the same commit:
 #
@@ -21,7 +23,7 @@ SERVICES=("filesystem" "github" "scraper" "termux" "network" "clipboard" "media"
 
 for service in "${SERVICES[@]}"; do
     echo "Building $service for ARM64 (version $VERSION)..."
-    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+    CGO_ENABLED=0 GOOS=android GOARCH=arm64 \
         go build \
             -trimpath \
             -ldflags="-s -w -buildid= -X github.com/kahz12/droidmcp/internal/buildinfo.Version=${VERSION}" \

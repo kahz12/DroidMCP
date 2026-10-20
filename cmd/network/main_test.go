@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -221,6 +222,132 @@ func TestHandleNetworkInfoReturnsJSON(t *testing.T) {
 	}
 }
 
+// fakeSubnetSources replaces interface listing and termux-wifi-connectioninfo.
+// Nil addrs fails the listing the way Android 11+ does for apps; an empty wifi
+// fails the command as when Termux:API is missing. It returns a counter of
+// termux-wifi-connectioninfo runs.
+func fakeSubnetSources(t *testing.T, addrs []net.Addr, wifi string) *int {
+	t.Helper()
+	prevAddrs, prevWifi := interfaceAddrs, wifiInfo
+	t.Cleanup(func() { interfaceAddrs, wifiInfo = prevAddrs, prevWifi })
+	interfaceAddrs = func() ([]net.Addr, error) {
+		if addrs == nil {
+			return nil, errors.New("route ip+net: netlinkrib: permission denied")
+		}
+		return addrs, nil
+	}
+	runs := new(int)
+	wifiInfo = func(context.Context) ([]byte, error) {
+		*runs++
+		if wifi == "" {
+			return nil, errors.New(`exec: "termux-wifi-connectioninfo": executable file not found in $PATH`)
+		}
+		return []byte(wifi), nil
+	}
+	return runs
+}
+
+// onWifi is termux-wifi-connectioninfo's output on a Wi-Fi network, trimmed.
+const onWifi = `{"bssid":"ec:75:0c:c8:b1:72","ip":"192.168.2.7","link_speed_mbps":433,"supplicant_state":"COMPLETED"}`
+
+func TestWifiIPv4(t *testing.T) {
+	for raw, want := range map[string]string{
+		onWifi: "192.168.2.7",
+		`{"ip":"0.0.0.0","supplicant_state":"DISCONNECTED"}`:    "",
+		`{"ip":"192.168.2.7","supplicant_state":"ASSOCIATING"}`: "",
+		`{"ip":"0.0.0.0","supplicant_state":"COMPLETED"}`:       "",
+		`{"ip":"fe80::1","supplicant_state":"COMPLETED"}`:       "",
+		`Termux:API is not installed`:                           "",
+	} {
+		got := ""
+		if ip := wifiIPv4([]byte(raw)); ip != nil {
+			got = ip.String()
+		}
+		if got != want {
+			t.Errorf("%s: got %q, want %q", raw, got, want)
+		}
+	}
+}
+
+func TestLocalSubnet(t *testing.T) {
+	ctx := context.Background()
+	t.Run("interfaces readable", func(t *testing.T) {
+		runs := fakeSubnetSources(t, []net.Addr{
+			&net.IPNet{IP: net.IPv4(127, 0, 0, 1), Mask: net.CIDRMask(8, 32)},
+			&net.IPNet{IP: net.IPv4(10, 1, 2, 3), Mask: net.CIDRMask(16, 32)},
+		}, onWifi)
+		if got, assumed := localSubnet(ctx); got != "10.1.0.0/16" || assumed {
+			t.Errorf("got %q assumed=%v, want the interface's real mask", got, assumed)
+		}
+		if *runs != 0 {
+			t.Error("ran termux-wifi-connectioninfo although the interfaces were readable")
+		}
+	})
+	t.Run("Android 11+ on Wi-Fi", func(t *testing.T) {
+		fakeSubnetSources(t, nil, onWifi)
+		if got, assumed := localSubnet(ctx); got != "192.168.2.0/24" || !assumed {
+			t.Errorf("got %q assumed=%v, want the assumed /24 around the Wi-Fi address", got, assumed)
+		}
+	})
+	t.Run("Android 11+ off Wi-Fi", func(t *testing.T) {
+		fakeSubnetSources(t, nil, `{"ip":"0.0.0.0","supplicant_state":"DISCONNECTED"}`)
+		if got, _ := localSubnet(ctx); got != "" {
+			t.Errorf("got %q, want nothing on mobile data", got)
+		}
+	})
+	t.Run("Android 11+ without Termux:API", func(t *testing.T) {
+		fakeSubnetSources(t, nil, "")
+		if got, _ := localSubnet(ctx); got != "" {
+			t.Errorf("got %q", got)
+		}
+	})
+}
+
+func TestScanNetworkAssumedSubnet(t *testing.T) {
+	t.Setenv("DROIDMCP_NETWORK_ALLOW_PUBLIC", "")
+	fakeSubnetSources(t, nil, onWifi)
+	// Cancelled up front: this checks what is reported, not a scan of the LAN.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res, err := handleScanNetwork(ctx, callRequest(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, isErr := resultText(t, res)
+	var got scanResult
+	if isErr || json.Unmarshal([]byte(text), &got) != nil {
+		t.Fatalf("want a scan result, got %s", text)
+	}
+	if got.Subnet != "192.168.2.0/24" || !strings.HasPrefix(got.Note, assumedSubnetNote+"; ") || !strings.Contains(got.Note, "canceled") {
+		t.Errorf("subnet %q, note %q: want the assumed /24 flagged, then the scan's own note", got.Subnet, got.Note)
+	}
+
+	fakeSubnetSources(t, nil, "")
+	res, err = handleScanNetwork(context.Background(), callRequest(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, isErr := resultText(t, res); !isErr || !strings.Contains(text, "pass subnet") {
+		t.Errorf("without any way to detect the subnet: %s", text)
+	}
+}
+
+func TestNetworkInfoFlagsAssumedSubnet(t *testing.T) {
+	fakeSubnetSources(t, nil, onWifi)
+	res, err := handleNetworkInfo(context.Background(), callRequest(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := resultText(t, res)
+	var got networkInfo
+	if err := json.Unmarshal([]byte(text), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.LocalSubnet != "192.168.2.0/24" || got.Note != assumedSubnetNote {
+		t.Errorf("local_subnet %q, note %q", got.LocalSubnet, got.Note)
+	}
+}
+
 func TestDefaultGatewayMissingFile(t *testing.T) {
 	prev := procRoutePath
 	procRoutePath = "/nonexistent/proc/route"
@@ -265,15 +392,18 @@ func TestHandleTracerouteRejectsPublicByDefault(t *testing.T) {
 }
 
 // tracerouteShims replaces PATH with a directory that holds only the named
-// tools, so chooseTracerouteTool sees exactly those. Each tool runs script.
+// tools, so chooseTracerouteTool sees exactly those. Each tool runs script
+// with the original PATH back: on Android /bin/sh is mksh, where printf is not
+// a builtin.
 func tracerouteShims(t *testing.T, script string, names ...string) string {
 	t.Helper()
 	if _, err := os.Stat("/bin/sh"); err != nil {
 		t.Skipf("/bin/sh not available: %v", err)
 	}
 	dir := t.TempDir()
+	header := "#!/bin/sh\nPATH='" + strings.ReplaceAll(os.Getenv("PATH"), "'", `'\''`) + "'\n"
 	for _, name := range names {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+script), 0o755); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(header+script), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

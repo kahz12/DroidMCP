@@ -249,9 +249,15 @@ func TestTaskLocation(t *testing.T) {
 	if loc, _ := taskLocation(); loc != time.Local {
 		t.Errorf("with a bad Android zone: %v, want time.Local", loc)
 	}
-	t.Setenv("TZ", "UTC")
 	androidTimeZone = func() string { return "Europe/Madrid" }
+	for _, tz := range []string{"America/Lima", ":America/Lima"} {
+		t.Setenv("TZ", tz)
+		if loc, _ := taskLocation(); loc.String() != "America/Lima" {
+			t.Errorf("TZ=%s: %v, want America/Lima", tz, loc)
+		}
+	}
+	t.Setenv("TZ", "/no/such/zoneinfo")
 	if loc, _ := taskLocation(); loc != time.Local {
-		t.Errorf("with TZ set: %v, want time.Local", loc)
+		t.Errorf("with TZ set to something LoadLocation cannot read: %v, want time.Local", loc)
 	}
 }

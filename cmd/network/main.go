@@ -56,7 +56,7 @@ func registerTools(s *core.DroidServer) {
 
 	add(mcp.NewTool("scan_network",
 		mcp.WithDescription("Scan a private subnet for active hosts. Returns JSON with IP, MAC (from ARP) and open ports."),
-		mcp.WithString("subnet", mcp.Description("CIDR to scan (e.g. 192.168.1.0/24). If empty, the local subnet is auto-detected.")),
+		mcp.WithString("subnet", mcp.Description("CIDR to scan (e.g. 192.168.1.0/24). If empty, the local subnet is auto-detected (on Android 11+, the /24 around the Wi-Fi address).")),
 		mcp.WithNumber("timeout_seconds", mcp.Description("Per-call timeout. Default 30s, max 120s.")),
 	), handleScanNetwork)
 
@@ -109,11 +109,12 @@ type scanResult struct {
 
 func handleScanNetwork(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	subnet := strings.TrimSpace(req.GetString("subnet", ""))
+	var assumed bool
 	if subnet == "" {
-		subnet = getLocalSubnet()
+		subnet, assumed = localSubnet(ctx)
 	}
 	if subnet == "" {
-		return mcp.NewToolResultError("could not detect local subnet and none provided"), nil
+		return mcp.NewToolResultError("could not detect the local subnet; pass subnet, e.g. 192.168.1.0/24 (on Android 11+, which hides network interfaces from apps, detection needs Termux:API and a Wi-Fi connection)"), nil
 	}
 	ipnet, err := validateCIDR(subnet)
 	if err != nil {
@@ -143,6 +144,9 @@ func handleScanNetwork(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 			res.Capped = true
 			res.Note = scanErr.Error()
 		}
+	}
+	if assumed {
+		res.Note = strings.TrimSuffix(assumedSubnetNote+"; "+res.Note, "; ")
 	}
 	return jsonResult(res)
 }
@@ -229,8 +233,7 @@ func handleNSLookup(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	resolver := &net.Resolver{}
-	ips, err := resolver.LookupIPAddr(ctx, host)
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("resolve %s: %v", host, err)), nil
 	}
@@ -256,8 +259,7 @@ func handleReverseDNS(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	if ip == nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid IP %q", ipStr)), nil
 	}
-	resolver := &net.Resolver{}
-	names, err := resolver.LookupAddr(ctx, ip.String())
+	names, err := net.DefaultResolver.LookupAddr(ctx, ip.String())
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("reverse %s: %v", ip, err)), nil
 	}
@@ -334,8 +336,8 @@ func chooseTracerouteTool(host string, maxHops int) (string, []string, error) {
 	return "", nil, errors.New("no tracepath or traceroute binary on PATH; install inetutils to enable this tool")
 }
 
-func handleNetworkInfo(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return jsonResult(gatherNetworkInfo())
+func handleNetworkInfo(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return jsonResult(gatherNetworkInfo(ctx))
 }
 
 type listDevicesResult struct {

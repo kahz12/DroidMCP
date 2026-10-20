@@ -37,7 +37,7 @@ Claude Code / Gemini CLI
 | SQLite           | `modernc.org/sqlite`                         |
 | Task scripts     | `mvdan.cc/sh` (embedded shell interpreter)   |
 | Config           | `spf13/viper` (environment variables only)   |
-| Build target     | `GOOS=linux GOARCH=arm64`                    |
+| Build target     | `GOOS=android GOARCH=arm64`                  |
 | Structure        | Monorepo                                     |
 
 ---
@@ -95,7 +95,7 @@ DroidMCP/
 - [x] `scripts/build-arm64.sh` — Compiles all binaries for ARM64
 - [x] `Makefile` — Commands: `build`, `test`, `clean`, `install`
 - [x] `.github/workflows/build.yml` — CI/CD: auto build + release on each tag
-- [x] Supply chain: SHA-pinned third-party actions, pinned lint/gosec versions, `govulncheck`, linux/arm64 build on every PR, Dependabot
+- [x] Supply chain: SHA-pinned third-party actions, pinned lint/gosec versions, `govulncheck`, android/arm64 build on every PR, Dependabot
 
 ---
 

@@ -2,10 +2,16 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/hex"
+	"encoding/json"
 	"net"
 	"os"
+	"os/exec"
 	"strings"
+	"time"
+
+	"github.com/kahz12/droidmcp/internal/dnsconf"
 )
 
 // interfaceInfo describes one local NIC for the network_info tool.
@@ -22,24 +28,30 @@ type networkInfo struct {
 	DNSServers     []string        `json:"dns_servers,omitempty"`
 	Interfaces     []interfaceInfo `json:"interfaces,omitempty"`
 	LocalSubnet    string          `json:"local_subnet,omitempty"`
+	Note           string          `json:"note,omitempty"`
 }
 
 // procRoutePath is /proc/net/route on Linux/Termux. Tests can override it.
 var procRoutePath = "/proc/net/route"
 
-// resolvConfPath is /etc/resolv.conf. Tests can override it.
-var resolvConfPath = "/etc/resolv.conf"
+// resolvConfPath is /etc/resolv.conf, or Termux's on Android, which has none.
+// Tests can override it.
+var resolvConfPath = dnsconf.Path()
 
 // gatherNetworkInfo collects the interface list, the default gateway from
-// /proc/net/route and the DNS servers from /etc/resolv.conf. Best effort:
+// /proc/net/route and the DNS servers from resolvConfPath. Best effort:
 // missing files or unreadable interfaces are reflected as empty fields, not
 // errors, so the caller still gets whatever we could find.
-func gatherNetworkInfo() networkInfo {
+func gatherNetworkInfo(ctx context.Context) networkInfo {
+	subnet, assumed := localSubnet(ctx)
 	out := networkInfo{
 		DefaultGateway: defaultGatewayFromProc(),
 		DNSServers:     dnsServersFromResolv(),
 		Interfaces:     listInterfaces(),
-		LocalSubnet:    getLocalSubnet(),
+		LocalSubnet:    subnet,
+	}
+	if assumed {
+		out.Note = assumedSubnetNote
 	}
 	return out
 }
@@ -81,29 +93,9 @@ func defaultGatewayFromProc() string {
 	return ""
 }
 
-// dnsServersFromResolv returns the nameserver lines from /etc/resolv.conf.
-// On Android/Termux the file usually doesn't exist (the system uses
-// `getprop net.dns1`), in which case the slice is empty.
+// dnsServersFromResolv returns the nameserver lines from resolvConfPath.
 func dnsServersFromResolv() []string {
-	f, err := os.Open(resolvConfPath)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-
-	var out []string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == "nameserver" {
-			out = append(out, fields[1])
-		}
-	}
-	return out
+	return dnsconf.Nameservers(resolvConfPath)
 }
 
 // listInterfaces enumerates local NICs with their MAC and IP addresses.
@@ -131,10 +123,75 @@ func listInterfaces() []interfaceInfo {
 	return out
 }
 
-// getLocalSubnet returns the CIDR of the first non-loopback IPv4 interface,
+// interfaceAddrs is net.InterfaceAddrs. Tests replace it to play Android 11+,
+// which refuses apps the netlink socket it needs.
+var interfaceAddrs = net.InterfaceAddrs
+
+// wifiInfo runs termux-wifi-connectioninfo and returns its JSON. Tests replace
+// it.
+var wifiInfo = func(ctx context.Context) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, wifiInfoTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "termux-wifi-connectioninfo")
+	// Stop waiting for stdout shortly after the timeout: the wrapper's
+	// termux-api child can outlive it and keep the pipe open.
+	cmd.WaitDelay = 2 * time.Second
+	return cmd.Output()
+}
+
+// wifiInfoTimeout bounds termux-wifi-connectioninfo, which waits forever when
+// the Termux:API app is not installed.
+const wifiInfoTimeout = 5 * time.Second
+
+// assumedPrefix is the mask localSubnet assumes around the Wi-Fi address: that
+// of nearly every home and small-office network.
+const assumedPrefix = 24
+
+const assumedSubnetNote = "the subnet is the /24 around the Wi-Fi address: Android hides network interfaces and their masks from apps, so the real one may be wider or narrower"
+
+// localSubnet returns the subnet to scan when none is given: the first
+// non-loopback IPv4 interface's, with the mask the kernel reports. Android 11+
+// hides interfaces from apps, so there it falls back to the /24 around the
+// Wi-Fi address Termux:API reports, and assumed is true. It returns "" when
+// neither works: Android without Termux:API, or off Wi-Fi (mobile data has no
+// LAN to scan).
+func localSubnet(ctx context.Context) (subnet string, assumed bool) {
+	if s := interfaceSubnet(); s != "" {
+		return s, false
+	}
+	out, err := wifiInfo(ctx)
+	if err != nil {
+		return "", false
+	}
+	ip := wifiIPv4(out)
+	if ip == nil {
+		return "", false
+	}
+	mask := net.CIDRMask(assumedPrefix, 32)
+	return (&net.IPNet{IP: ip.Mask(mask), Mask: mask}).String(), true
+}
+
+// wifiIPv4 returns the address of a completed Wi-Fi connection from
+// termux-wifi-connectioninfo's JSON, or nil when there is none.
+func wifiIPv4(out []byte) net.IP {
+	var info struct {
+		IP              string `json:"ip"`
+		SupplicantState string `json:"supplicant_state"`
+	}
+	if json.Unmarshal(out, &info) != nil || info.SupplicantState != "COMPLETED" {
+		return nil
+	}
+	ip := net.ParseIP(info.IP).To4()
+	if ip == nil || ip.IsUnspecified() {
+		return nil
+	}
+	return ip
+}
+
+// interfaceSubnet returns the CIDR of the first non-loopback IPv4 interface,
 // using the actual mask exposed by the kernel (not a hard-coded /24).
-func getLocalSubnet() string {
-	addrs, err := net.InterfaceAddrs()
+func interfaceSubnet() string {
+	addrs, err := interfaceAddrs()
 	if err != nil {
 		return ""
 	}

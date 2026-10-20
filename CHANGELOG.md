@@ -25,7 +25,7 @@ ships one ARM64 binary per server plus a cosign-signed `SHA256SUMS`.
   [Verifying a release](docs/security.md#verifying-a-release) section with the
   exact `cosign verify-blob` command (the README already pointed there).
 - CI: `govulncheck` gates releases alongside test, lint and gosec; every push and
-  PR cross-compiles linux/arm64; Dependabot proposes Go module and Actions
+  PR cross-compiles android/arm64; Dependabot proposes Go module and Actions
   updates weekly.
 - Four servers that had not been in a release yet (v0.3.0 shipped ten):
   - `mcp-contacts` — read-only address book: search, details, JSON/vCard export.
@@ -70,6 +70,19 @@ ships one ARM64 binary per server plus a cosign-signed `SHA256SUMS`.
 
 ### Fixed
 
+- **Release binaries crashed in Termux** (`SIGSYS: bad system call`) on the
+  first tool that runs a command, v0.3.0 included. They were built for
+  `GOOS=linux`, whose `exec.LookPath` calls `faccessat2`, and Android's seccomp
+  filter kills any app that does. Releases are now built for `GOOS=android`.
+  Binaries built in Termux were not affected.
+- **DNS failed in the release binaries**: Android has no `/etc/resolv.conf`, so
+  Go asked `localhost:53`. Servers now fall back to Termux's
+  `$PREFIX/etc/resolv.conf`, and `network_info` lists those servers.
+- `mcp-automation` follows `TZ` in android builds too, where Go's `time.Local`
+  is always UTC.
+- `scan_network` without `subnet` failed on Android 11+, which hides network
+  interfaces from apps. It now scans the `/24` around the Wi-Fi address from
+  Termux:API, and says so in `note` (`network_info` too).
 - `copy_file` truncated the source when copying a file onto itself, including
   through a hard link. Recursive copies into the source itself or one of its
   ancestors, through symlink aliases, onto FIFOs, or that left 0777 files behind

@@ -103,6 +103,10 @@ func TestExportKeepsDestinationModeAndSymlink(t *testing.T) {
 	if err := os.WriteFile(real, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Explicitly, since WriteFile applies the umask (Termux's is 077).
+	if err := os.Chmod(real, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Symlink(filepath.Join("exports", "2026.csv"), filepath.Join(root, "latest.csv")); err != nil {
 		t.Skipf("symlinks unsupported in this environment: %v", err)
 	}

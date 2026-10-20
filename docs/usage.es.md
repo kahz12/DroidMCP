@@ -624,7 +624,7 @@ por host con IP, MAC (de ARP) y puertos abiertos, y los registra en el inventari
 
 | Argumento | Tipo | Requerido | Por defecto | Descripción |
 |-----------|------|:---:|-------------|-------------|
-| `subnet` | string | no | autodetectada | CIDR a escanear, p. ej. `192.168.1.0/24`. Vacío autodetecta la subred local desde la máscara de interfaz del kernel. |
+| `subnet` | string | no | autodetectada | CIDR a escanear, p. ej. `192.168.1.0/24`. Vacío autodetecta la subred local desde la máscara de interfaz del kernel. Android 11+ oculta las interfaces a las apps, así que ahí escanea la `/24` alrededor de la IP del Wi-Fi (requiere Termux:API) y lo indica en `note`. |
 | `timeout_seconds` | number | no | `30` | Timeout por llamada. Máx `120`. |
 
 **`check_ports`** — chequeo TCP concurrente de puertos en un host. Devuelve
@@ -659,6 +659,8 @@ por host con IP, MAC (de ARP) y puertos abiertos, y los registra en el inventari
 
 **`network_info`** — metadatos locales: gateway por defecto (de
 `/proc/net/route`), servidores DNS, interfaces y subred detectada. Sin argumentos.
+En Android 11+ las apps no pueden leer las interfaces ni `/proc/net/route`, así
+que verás los servidores DNS y la `/24` supuesta del Wi-Fi, señalada en `note`.
 
 **`list_devices`** — todos los dispositivos recordados de ejecuciones previas de
 `scan_network`. Sin argumentos. Vacío hasta que ejecutes un escaneo.

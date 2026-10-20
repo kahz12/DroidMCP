@@ -223,14 +223,17 @@ var androidTimeZone = func() string {
 
 // taskLocation picks the time zone cron expressions are evaluated in:
 // DROIDMCP_AUTOMATION_TZ, then TZ, then Android's own setting. A Go binary
-// built for linux does not see Android's zone by itself (there is no
-// /etc/localtime), so without the last step "0 8 * * *" would fire at 08:00
-// UTC.
+// does not see Android's zone by itself (there is no /etc/localtime, and Go's
+// time.Local for android is always UTC, whatever TZ says), so without the
+// last two steps "0 8 * * *" would fire at 08:00 UTC.
 func taskLocation() (*time.Location, error) {
 	if name := strings.TrimSpace(os.Getenv(tzEnv)); name != "" {
 		return time.LoadLocation(name)
 	}
-	if os.Getenv("TZ") != "" {
+	if tz := os.Getenv("TZ"); tz != "" {
+		if loc, err := time.LoadLocation(strings.TrimPrefix(tz, ":")); err == nil {
+			return loc, nil
+		}
 		return time.Local, nil
 	}
 	if name := androidTimeZone(); name != "" {

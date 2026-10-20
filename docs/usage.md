@@ -606,7 +606,7 @@ IP, MAC (from ARP), and open ports, and records them in the inventory.
 
 | Argument | Type | Required | Default | Description |
 |----------|------|:---:|---------|-------------|
-| `subnet` | string | no | auto-detected | CIDR to scan, e.g. `192.168.1.0/24`. Empty auto-detects the local subnet from the kernel's interface mask. |
+| `subnet` | string | no | auto-detected | CIDR to scan, e.g. `192.168.1.0/24`. Empty auto-detects the local subnet from the kernel's interface mask. Android 11+ hides interfaces from apps, so there it scans the `/24` around the Wi-Fi address (needs Termux:API) and says so in `note`. |
 | `timeout_seconds` | number | no | `30` | Per-call timeout. Max `120`. |
 
 **`check_ports`** — concurrent TCP port check on one host. Returns
@@ -640,7 +640,9 @@ IP, MAC (from ARP), and open ports, and records them in the inventory.
 | `timeout_seconds` | number | no | `30` | Per-call timeout. Max `120`. |
 
 **`network_info`** — local metadata: default gateway (from `/proc/net/route`),
-DNS servers, interfaces, and detected subnet. No arguments.
+DNS servers, interfaces, and detected subnet. No arguments. On Android 11+ apps
+can read neither the interfaces nor `/proc/net/route`, so expect the DNS servers
+and the assumed Wi-Fi `/24`, flagged in `note`.
 
 **`list_devices`** — every device remembered from prior `scan_network` runs. No
 arguments. Empty until you run a scan.

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/kahz12/droidmcp/internal/config"
+	"github.com/kahz12/droidmcp/internal/dnsconf"
 	"github.com/kahz12/droidmcp/internal/logger"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -79,8 +80,17 @@ type DroidServer struct {
 	DefaultRateLimits map[string]config.RateLimit
 }
 
+// dnsServers points DNS at Termux's nameservers on Android (see dnsconf). It is
+// set when the package initializes, before any server's main runs, so even the
+// lookups a server makes before NewDroidServer (mcp-github validates its token
+// first) work.
+var dnsServers = dnsconf.Install()
+
 // NewDroidServer initializes a new MCP server with the given identity.
 func NewDroidServer(name, version string) *DroidServer {
+	if dnsServers != nil {
+		logger.Info("DNS: no /etc/resolv.conf, using Termux's nameservers", "servers", strings.Join(dnsServers, ","))
+	}
 	s := server.NewMCPServer(name, version)
 	return &DroidServer{
 		MCPServer: s,
