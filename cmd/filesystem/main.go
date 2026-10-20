@@ -111,8 +111,8 @@ func registerTools(s *core.DroidServer) {
 	)
 	s.MCPServer.AddTool(readFileTool, handleReadFile)
 
-	// read_file_lines: Line-oriented reader, friendlier than offset/length for
-	// LLM workflows.
+	// read_file_lines: line-oriented reader, easier to page through than
+	// offset/length.
 	readFileLinesTool := mcp.NewTool("read_file_lines",
 		mcp.WithDescription("Read a 1-indexed inclusive range of lines from a file"),
 		mcp.WithString("path", mcp.Required(), mcp.Description("Path to the file relative to root")),
@@ -210,12 +210,6 @@ func buildFileEntry(info fs.FileInfo) fileEntry {
 	}
 	return e
 }
-
-// Handler implementations follow the standard MCP pattern:
-// 1. Extract and validate arguments.
-// 2. Resolve secure path.
-// 3. Perform OS-level operation.
-// 4. Return ToolResult.
 
 func handleReadFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path, err := req.RequireString("path")

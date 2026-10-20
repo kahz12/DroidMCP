@@ -256,7 +256,7 @@ func mcpRoutes(streamable, sse http.Handler) http.Handler {
 }
 
 // buildHandler composes the full middleware chain around the MCP transport
-// handler. It is exported (lowercase but in-package) for direct testing
+// handler. It is separate from serveHTTP so tests can exercise the chain
 // without binding a network listener.
 func buildHandler(s *DroidServer, tlsEnabled bool, mcpHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()

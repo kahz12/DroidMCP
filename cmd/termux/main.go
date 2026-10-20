@@ -385,8 +385,7 @@ func stringMapArg(req mcp.CallToolRequest, name string) map[string]string {
 	return out
 }
 
+// formatFloat renders f in its shortest decimal form, without an exponent.
 func formatFloat(f float64) string {
-	// Just enough precision for TTS rate/pitch; avoids importing strconv
-	// imports across the file for this single call site.
 	return strconv.FormatFloat(f, 'f', -1, 64)
 }

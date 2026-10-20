@@ -124,7 +124,7 @@ func TestSendSMSWiring(t *testing.T) {
 	if !out.Sent || len(out.Recipients) != 1 || out.Recipients[0] != "+15551234567" || out.SimSlot == nil || *out.SimSlot != 1 {
 		t.Errorf("got %+v", out)
 	}
-	// Recipients go via -n, the slot via -s, and the body ONLY on stdin.
+	// Recipients go via -n, the slot via -s, and the body only on stdin.
 	if a := argv(); !strings.Contains(a, "-n\n+15551234567") || !strings.Contains(a, "-s\n1") {
 		t.Errorf("argv missing recipient/slot flags:\n%s", a)
 	}

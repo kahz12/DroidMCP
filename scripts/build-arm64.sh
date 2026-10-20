@@ -3,7 +3,8 @@
 # not linux: Android's seccomp filter kills an app that calls faccessat2, which
 # a linux build's os/exec.LookPath does. Flags match
 # .github/workflows/build.yml and the Makefile so local, CI and release
-# binaries are byte-identical when produced from the same commit:
+# binaries are byte-identical when produced from the same commit with the
+# same Go release:
 #
 #   -trimpath           : remove $GOPATH / build host paths from the binary
 #   -ldflags '-s -w'    : strip symbol table + DWARF

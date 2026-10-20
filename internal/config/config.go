@@ -163,8 +163,9 @@ func parseRateLimits(raw string) (map[string]RateLimit, error) {
 
 // LoadConfig reads the shared settings for the named server (the cmd/<name>
 // directory name): DROIDMCP_PORT, DROIDMCP_ROOT, DROIDMCP_TRANSPORT,
-// DROIDMCP_<SERVER>_DISABLED_TOOLS and DROIDMCP_<SERVER>_RATE_LIMITS. It applies defaults — including the
-// server's own default port — and validates them. Viper is used locally to
+// DROIDMCP_<SERVER>_DISABLED_TOOLS and DROIDMCP_<SERVER>_RATE_LIMITS. It
+// applies defaults — including the server's own default port — and validates
+// them. Viper is used locally to
 // source the env values and then discarded: no configuration state is retained
 // beyond the returned Config, and per-process isolation keeps tests independent.
 func LoadConfig(server string) (*Config, error) {

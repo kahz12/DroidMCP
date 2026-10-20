@@ -214,8 +214,8 @@ func interfaceSubnet() string {
 	return ""
 }
 
+// intToStr formats i in decimal.
 func intToStr(i int) string {
-	// Tiny helper to avoid importing strconv solely for this.
 	if i == 0 {
 		return "0"
 	}

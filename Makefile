@@ -2,9 +2,9 @@
 
 # Reproducible-build flags shared by every target. -trimpath strips local
 # paths from the binary so a build on machine A and machine B with the same
-# source tree produce byte-identical output; -s -w drop the symbol and DWARF
-# tables; -buildid= clears the random link-time build ID so the result is
-# stable across rebuilds.
+# source tree and Go release produce byte-identical output; -s -w drop the
+# symbol and DWARF tables; -buildid= clears the random link-time build ID so
+# the result is stable across rebuilds.
 GOFLAGS_REPRO   := -trimpath
 # VERSION is stamped into internal/buildinfo.Version so /healthz and logs report
 # the real build. Defaults to the git tag/commit; overridable (e.g. VERSION=v1.2.3).

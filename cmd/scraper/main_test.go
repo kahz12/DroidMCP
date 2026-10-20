@@ -41,7 +41,7 @@ func resetCache(t *testing.T) {
 	t.Cleanup(func() { fetchCache = prev })
 }
 
-// localTestServer ALLOWs the SSRF guard to reach the loopback httptest server.
+// localTestServer lets the SSRF guard reach the loopback httptest server.
 // The flag flips back via t.Setenv cleanup, and we also reset the cache so
 // previous tests do not leak hits.
 func localTestServer(t *testing.T, h http.Handler) *httptest.Server {

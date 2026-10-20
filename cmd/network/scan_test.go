@@ -104,9 +104,9 @@ func TestEnrichWithARPMissingFileIsBenign(t *testing.T) {
 }
 
 func TestScanSubnetFindsListener(t *testing.T) {
-	// Spin up a TCP listener on 127.0.0.1:80 alternative — the scanner only
-	// probes ports 22/80/443, so we listen on 80 if we can. Most CI/Termux
-	// hosts won't let us bind 80; try 22, 443, fall back to skip.
+	// The scanner only probes ports 22, 80 and 443, so the listener has to be on
+	// one of them. Binding a low port is often not allowed (CI, Termux): try each
+	// and skip the test if none is available.
 	listeners := []string{"127.0.0.1:80", "127.0.0.1:22", "127.0.0.1:443"}
 	var ln net.Listener
 	for _, addr := range listeners {

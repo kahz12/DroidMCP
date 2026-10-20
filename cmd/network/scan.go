@@ -15,7 +15,7 @@ import (
 
 // maxScanHosts caps CIDR expansion so a /8 or /16 cannot spawn millions of
 // dials on a phone-class device. /20 is already 4096 hosts, which is the
-// most we'll attempt.
+// most it will scan.
 const maxScanHosts = 4096
 
 // scanWorkerLimit bounds concurrent dials to keep file-descriptor and

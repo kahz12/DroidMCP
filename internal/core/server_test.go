@@ -199,7 +199,7 @@ func TestPipelineHealthzWithSecretSet(t *testing.T) {
 
 func TestPipelineProtectedRouteRequiresKey(t *testing.T) {
 	ds := newTestServer("topsecret")
-	// Downstream handler that should NOT be reached without a valid key.
+	// Downstream handler that should not be reached without a valid key.
 	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("inside"))

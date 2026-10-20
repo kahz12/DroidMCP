@@ -53,8 +53,8 @@ const (
 // runCommand is the single execution path used by every handler in this
 // server. It enforces the allowlist (unless opts.Trusted), applies the
 // per-call timeout, captures stdout/stderr separately with byte caps, and
-// SIGTERMs the child process group on context cancellation (panic button)
-// before escalating to SIGKILL after a short grace period.
+// SIGTERMs the child process group on context cancellation before escalating
+// to SIGKILL after a short grace period.
 func runCommand(ctx context.Context, opts execOptions) (*execResult, error) {
 	if strings.TrimSpace(opts.Command) == "" {
 		return nil, errors.New("command is empty")
@@ -116,8 +116,8 @@ func runCommand(ctx context.Context, opts execOptions) (*execResult, error) {
 	// any helpers it forked (e.g. shell pipelines).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	// Panic button: when ctx (or our timeout) fires, send SIGTERM to the
-	// whole group and let the runtime SIGKILL after WaitDelay.
+	// When ctx (or our timeout) fires, send SIGTERM to the whole group and
+	// let the runtime SIGKILL after WaitDelay.
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil

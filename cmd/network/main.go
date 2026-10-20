@@ -328,9 +328,7 @@ func chooseTracerouteTool(host string, maxHops int) (string, []string, error) {
 		return path, []string{"-n", "-m", strconv.Itoa(maxHops), host}, nil
 	}
 	if path, err := exec.LookPath("traceroute"); err == nil {
-		// -T attempts TCP traceroute; on hosts where it requires root the
-		// binary usually falls back to UDP without prompting. -n suppresses
-		// reverse DNS for speed.
+		// -n skips reverse DNS lookups; -m caps the hop count.
 		return path, []string{"-n", "-m", strconv.Itoa(maxHops), host}, nil
 	}
 	return "", nil, errors.New("no tracepath or traceroute binary on PATH; install inetutils to enable this tool")

@@ -28,7 +28,7 @@ type historyEntry struct {
 
 // clipboardHistory is a bounded ring of recent writes. Eviction is FIFO: the
 // oldest entry is dropped when either the entry-count or total-byte cap is
-// exceeded. Reads (get_clipboard) do NOT push to history — only writes.
+// exceeded. Reads (get_clipboard) do not push to history; only writes do.
 type clipboardHistory struct {
 	mu         sync.Mutex
 	entries    []historyEntry

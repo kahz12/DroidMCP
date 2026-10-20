@@ -5,7 +5,7 @@
 // This is the highest-privilege Termux:API server: send_sms triggers a real,
 // billable, irreversible outbound message, and the read tools expose highly
 // sensitive content (one-time passcodes, 2FA, private conversations). It
-// therefore has NO dev mode — like mcp-termux/mcp-filesystem it refuses to
+// therefore has no dev mode — like mcp-termux/mcp-filesystem it refuses to
 // start without DROIDMCP_SMS_KEY or DROIDMCP_API_KEY, so nothing else on
 // localhost (other apps, adb) can drive it unauthenticated.
 //

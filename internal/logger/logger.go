@@ -94,7 +94,7 @@ func redactingReplaceAttr(groups []string, a slog.Attr) slog.Attr {
 }
 
 // sensitiveSubstrings is a small, intentionally narrow set: matches that
-// almost certainly indicate a credential. We deliberately do NOT include
+// almost certainly indicate a credential. We deliberately leave out
 // "auth" alone because it collides with non-sensitive attrs like the
 // "auth: enabled" startup line in core/server.go.
 var sensitiveSubstrings = []string{
@@ -110,11 +110,9 @@ var sensitiveSubstrings = []string{
 
 // IsSensitiveKey reports whether the given name — a slog attribute key, or an
 // environment variable name in mcp-termux's read_env — likely carries a
-// credential. It runs a case-insensitive substring check against
-// sensitiveSubstrings and an additional word-boundary check for the
-// standalone token "key" so "api_key" / "x-api-key" / "primary_key" are
-// caught while "monkey" / "keyboard" / "keep" / "ApiKey" too (camelCase is
-// handled by lowercasing then checking "apikey" substring).
+// credential. It lowercases the name and looks for any of sensitiveSubstrings,
+// so "ApiKey" and "api_key" both match, and for "key" as a standalone word, so
+// "primary_key" matches while "monkey", "keyboard" and "keep" do not.
 func IsSensitiveKey(key string) bool {
 	lk := strings.ToLower(key)
 	for _, s := range sensitiveSubstrings {
@@ -162,7 +160,7 @@ func Error(msg string, err error, args ...any) {
 	Log.Error(msg, args...)
 }
 
-// Fatal logs an error and terminates the process. Use sparingly.
+// Fatal logs an error and exits the process with status 1.
 func Fatal(msg string, err error, args ...any) {
 	Error(msg, err, args...)
 	os.Exit(1)

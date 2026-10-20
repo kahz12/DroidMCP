@@ -29,7 +29,7 @@ const (
 var retryBaseDelay = 1 * time.Second
 
 // retryTransport retries idempotent (GET/HEAD) requests on 5xx and 429.
-// Mutating verbs (POST/PUT/PATCH/DELETE) are NOT retried automatically because
+// Mutating verbs (POST/PUT/PATCH/DELETE) are not retried automatically because
 // GitHub may have applied the side effect even when the transport reports a
 // network error; doing the same call twice could create duplicate issues or
 // commits. The caller can still observe the failure and decide.

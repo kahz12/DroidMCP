@@ -317,7 +317,7 @@ func fileExists(path string) bool {
 
 // removePartialOutput deletes the output a failed ffmpeg run may have left
 // behind, and reports whether a file was actually removed. It only acts when
-// the destination did NOT exist before the run: a pre-existing file may be the
+// the destination did not exist before the run: a pre-existing file may be the
 // user's data (already clobbered by ffmpeg -y, which we cannot undo), and
 // deleting it too would compound the damage.
 func removePartialOutput(absDst string, dstExisted bool) bool {

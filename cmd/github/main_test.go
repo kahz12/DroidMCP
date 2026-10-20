@@ -256,7 +256,7 @@ func TestStringArrayArg(t *testing.T) {
 	}
 }
 
-// --- shared helpers for the per-handler test files ---
+// Shared helpers for the per-handler test files.
 
 // handlerFn is the shape every tool handler shares, so argument-validation
 // cases can be driven from a table.

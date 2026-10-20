@@ -125,7 +125,7 @@ func (g *guard) exec(ctx context.Context, args []string) error {
 	cmd.Stdout = hc.Stdout
 	cmd.Stderr = hc.Stderr
 	// Own process group, SIGTERM to the whole group on timeout or delete, and
-	// SIGKILL to the command after WaitDelay: the same panic button as
+	// SIGKILL to the command after WaitDelay: the same shutdown sequence as
 	// mcp-termux.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
