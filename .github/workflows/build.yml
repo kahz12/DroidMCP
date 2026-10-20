@@ -80,13 +80,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      # Mirror the gosec excludes declared in .golangci.yml so the standalone
-      # binary applies the same policy as the lint job. Rationale for each
-      # rule lives in .golangci.yml (linters.settings.gosec.excludes).
-      - name: Run gosec
-        uses: securego/gosec@deb54465fea23d19a77f037e11e6589021f8501d # v2.29.0
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          args: -exclude=G104,G115,G204,G301,G304,G306,G404 ./...
+          go-version: '1.26'
+          cache: true
+
+      # gosec runs on the job's Go rather than through securego/gosec's Docker
+      # action: that image bundles its own Go (with GOTOOLCHAIN=local), which
+      # falls behind the go directive in go.mod and then cannot load the
+      # module at all. Mirror the gosec excludes declared in .golangci.yml so
+      # the standalone binary applies the same policy as the lint job;
+      # rationale for each rule lives there (linters.settings.gosec.excludes).
+      - name: Run gosec
+        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.29.0 -exclude=G104,G115,G204,G301,G304,G306,G404 ./...
 
   govulncheck:
     name: Vulnerabilities (govulncheck)
