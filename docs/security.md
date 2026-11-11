@@ -408,22 +408,22 @@ the service user can read when running multi-tenant.
 
 ## Verifying a release
 
-Each release ships `SHA256SUMS` plus a keyless cosign signature of it
-(`SHA256SUMS.sig`) and the signing certificate (`SHA256SUMS.pem`). The
-certificate is issued to the release workflow of this repository for a
-`v*` tag, so checking its identity proves the checksums came from that
-workflow and were not edited afterwards. Then check the binaries against
-the checksums:
+Each release ships `SHA256SUMS` plus a keyless cosign signature of it,
+packed in a Sigstore bundle (`SHA256SUMS.sigstore.json`) together with
+the signing certificate and the transparency-log entry. The certificate
+is issued to the release workflow of this repository for a `v*` tag, so
+checking its identity proves the checksums came from that workflow and
+were not edited afterwards. Then check the binaries against the
+checksums:
 
 ```bash
 base=https://github.com/kahz12/DroidMCP/releases/latest/download
-for f in droidmcp-filesystem SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem; do
+for f in droidmcp-filesystem SHA256SUMS SHA256SUMS.sigstore.json; do
   curl -fsSLO "$base/$f"
 done
 
 cosign verify-blob \
-  --certificate SHA256SUMS.pem \
-  --signature SHA256SUMS.sig \
+  --bundle SHA256SUMS.sigstore.json \
   --certificate-identity-regexp '^https://github\.com/kahz12/DroidMCP/\.github/workflows/build\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS                         # prints "Verified OK"
@@ -431,10 +431,18 @@ cosign verify-blob \
 sha256sum -c SHA256SUMS --ignore-missing   # droidmcp-filesystem: OK
 ```
 
-`cosign` is a Go program (`go install github.com/sigstore/cosign/v2/cmd/cosign@latest`);
-verification also queries the public Rekor transparency log, so it needs
-network access. Pin `@refs/tags/v0.4.0` instead of the `@refs/tags/v`
-prefix to accept exactly one release. The release build flags are
+`cosign` is a Go program (`go install github.com/sigstore/cosign/v3/cmd/cosign@latest`);
+verification fetches Sigstore's public trust root, so it needs network
+access. Pin `@refs/tags/v0.4.1` instead of the `@refs/tags/v` prefix to
+accept exactly one release.
+
+Releases up to v0.4.0 ship the signature and the certificate as two
+files, `SHA256SUMS.sig` and `SHA256SUMS.pem`, instead of a bundle:
+download those and pass `--certificate SHA256SUMS.pem --signature
+SHA256SUMS.sig` in place of `--bundle` (cosign v3 still accepts them,
+with a deprecation warning).
+
+The release build flags are
 reproducible (`-trimpath`, `-buildid=`), so rebuilding the tag with
 `scripts/build-arm64.sh` and the same upstream Go release (not Termux's
 patched `golang`) is expected to give the same hashes.

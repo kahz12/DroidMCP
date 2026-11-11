@@ -185,14 +185,16 @@ jobs:
           ls -la
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
 
+      # cosign v3 writes the signature, certificate and transparency-log entry
+      # into one Sigstore bundle; it refuses the old --output-signature /
+      # --output-certificate pair unless --bundle is given.
       - name: Sign SHA256SUMS (keyless)
         run: |
           cosign sign-blob \
             --yes \
-            --output-signature release/SHA256SUMS.sig \
-            --output-certificate release/SHA256SUMS.pem \
+            --bundle release/SHA256SUMS.sigstore.json \
             release/SHA256SUMS
 
       - name: Create Release
@@ -214,7 +216,6 @@ jobs:
             release/droidmcp-llmproxy
             release/droidmcp-automation
             release/SHA256SUMS
-            release/SHA256SUMS.sig
-            release/SHA256SUMS.pem
+            release/SHA256SUMS.sigstore.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
