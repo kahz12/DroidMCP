@@ -301,3 +301,35 @@ func TestHandleSetClipboardEmptyText(t *testing.T) {
 		t.Errorf("unexpected: %+v", got)
 	}
 }
+
+// Android 10+ hands a background reader an empty clipboard with no error, so
+// an empty read must say it may not be empty; a non-empty one needs no note.
+func TestHandleGetClipboardNotesThatEmptyMayBeBlocked(t *testing.T) {
+	store := fakeClipboardEnv(t)
+	read := func() getClipboardResult {
+		t.Helper()
+		res, err := handleGetClipboard(context.Background(), callRequest(nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, isErr := resultText(t, res)
+		if isErr {
+			t.Fatalf("get failed: %s", text)
+		}
+		var out getClipboardResult
+		if err := json.Unmarshal([]byte(text), &out); err != nil {
+			t.Fatalf("not JSON: %v\n%s", err, text)
+		}
+		return out
+	}
+
+	if out := read(); out.BytesLen != 0 || !strings.Contains(out.Note, "does not prove the clipboard is empty") {
+		t.Errorf("empty read without the note: %+v", out)
+	}
+	if err := os.WriteFile(store, []byte("hola"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out := read(); out.Text != "hola" || out.Note != "" {
+		t.Errorf("non-empty read: %+v, want the text and no note", out)
+	}
+}

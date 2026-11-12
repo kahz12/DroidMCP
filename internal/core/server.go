@@ -78,6 +78,11 @@ type DroidServer struct {
 	// config.AllTools), applied unless DROIDMCP_<SERVER>_RATE_LIMITS overrides
 	// or switches them off. Most servers set none.
 	DefaultRateLimits map[string]config.RateLimit
+
+	// Root is the DROIDMCP_ROOT a server confines its paths to (filesystem,
+	// media, sqlite). When set, tool error messages name paths relative to it
+	// instead of disclosing the absolute location (see rootRelativeErrors).
+	Root string
 }
 
 // dnsServers points DNS at Termux's nameservers on Android (see dnsconf). It is
@@ -99,14 +104,16 @@ func NewDroidServer(name, version string) *DroidServer {
 	}
 }
 
-// Serve installs the rate limits and removes the tools the operator disabled,
-// then runs the server on the transport cfg selects (DROIDMCP_TRANSPORT):
-// stdio, or the loopback HTTP listener on cfg.Port. It blocks until the client
-// goes away (stdio) or a shutdown signal arrives.
+// Serve installs the rate limits and, for a server with a Root, the
+// root-relative error messages, removes the tools the operator disabled, then
+// runs the server on the transport cfg selects (DROIDMCP_TRANSPORT): stdio, or
+// the loopback HTTP listener on cfg.Port. It blocks until the client goes away
+// (stdio) or a shutdown signal arrives.
 func (s *DroidServer) Serve(cfg *config.Config) error {
 	if err := s.applyRateLimits(cfg); err != nil {
 		return err
 	}
+	s.applyRoot()
 	if err := s.disableTools(cfg); err != nil {
 		return err
 	}

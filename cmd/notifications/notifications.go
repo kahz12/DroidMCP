@@ -7,8 +7,14 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kahz12/droidmcp/internal/termuxapi"
 	"github.com/mark3labs/mcp-go/mcp"
 )
+
+// notificationAccessHint explains a list_notifications timeout. Without
+// Notification Access, termux-notification-list never answers: it neither
+// prints an error nor exits, so the timeout is the only signal there is.
+const notificationAccessHint = "%s did not answer within %s. It waits without answering when Termux:API has no Notification Access: grant it in Android Settings → Apps → Special app access → Notification access → Termux:API, then retry"
 
 // validPriorities is the set termux-notification accepts for --priority.
 var validPriorities = map[string]bool{
@@ -53,6 +59,9 @@ func handleSendNotification(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		body, _ := json.Marshal(res)
 		return mcp.NewToolResultError(string(body)), nil
 	}
+	if msg, failed := termuxapi.Failure(binNotify, res.Stdout); failed {
+		return mcp.NewToolResultError(msg), nil
+	}
 	// termux-notification prints nothing on success. We can only echo back the
 	// id the caller supplied; a system-assigned id is not reported by the tool.
 	return jsonResult(sendResult{Sent: true, ID: id})
@@ -62,13 +71,20 @@ func handleListNotifications(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if err := ensureBinaries(binNotifyList); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	res, err := runCmd(ctx, binNotifyList, nil, reqTimeout(req, defaultExecTimeout))
+	timeout := reqTimeout(req, defaultExecTimeout)
+	res, err := runCmd(ctx, binNotifyList, nil, timeout)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	if res.ExitCode != 0 || res.TimedOut || res.Cancelled {
+	if res.TimedOut {
+		return mcp.NewToolResultError(fmt.Sprintf(notificationAccessHint, binNotifyList, timeout)), nil
+	}
+	if res.ExitCode != 0 || res.Cancelled {
 		body, _ := json.Marshal(res)
 		return mcp.NewToolResultError(string(body)), nil
+	}
+	if msg, failed := termuxapi.Failure(binNotifyList, res.Stdout); failed {
+		return mcp.NewToolResultError(msg), nil
 	}
 	return jsonPassthrough(res.Stdout)
 }
@@ -95,6 +111,9 @@ func handleDismissNotification(ctx context.Context, req mcp.CallToolRequest) (*m
 	if res.ExitCode != 0 || res.TimedOut || res.Cancelled {
 		body, _ := json.Marshal(res)
 		return mcp.NewToolResultError(string(body)), nil
+	}
+	if msg, failed := termuxapi.Failure(binNotifyRemove, res.Stdout); failed {
+		return mcp.NewToolResultError(msg), nil
 	}
 	return jsonResult(dismissResult{Dismissed: true, ID: id})
 }

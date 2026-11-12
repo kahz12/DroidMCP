@@ -358,7 +358,10 @@ otherwise, string paths in `mcp-filesystem` are relative to `DROIDMCP_ROOT`.
 Sandboxed file operations under `DROIDMCP_ROOT`. Paths are validated on every
 call: absolute paths are rejected, `..` traversal is rejected, and symlinks are
 resolved and re-checked so a link inside the root cannot point outside it. This
-server requires both `DROIDMCP_ROOT` and a key, and has no dev mode.
+server requires both `DROIDMCP_ROOT` and a key, and has no dev mode. Error
+messages name paths relative to the root (`rename a.txt b/c.txt: …`) and never
+disclose where the root lives on the device; `mcp-media` and `mcp-sqlite` do the
+same.
 
 **`read_file`** — read a file, optionally a byte range.
 
@@ -414,7 +417,8 @@ relative to the search root, one per line, or `No matches found`.
 | `regex` | string | one of | — | Regular expression. Mutually exclusive with `pattern`. |
 | `max_results` | number | no | `0` | Stop after this many matches; `0` is unlimited. |
 
-**`delete_file`** — delete a file or directory.
+**`delete_file`** — delete a file or directory. A path that does not exist is an
+error, with or without `recursive`, and the root itself (`.`) is never deleted.
 
 | Argument | Type | Required | Default | Description |
 |----------|------|:---:|---------|-------------|
@@ -422,7 +426,9 @@ relative to the search root, one per line, or `No matches found`.
 | `recursive` | boolean | no | `false` | Remove non-empty directories recursively. Without it, a non-empty directory errors with a hint. |
 
 **`move_file`** — move or rename. Backed by `os.Rename`, so source and
-destination must be on the same filesystem.
+destination must be on the same filesystem. Missing parent directories of the
+destination are created, as `write_file` and `copy_file` do; moving the root
+itself, or a directory into its own subtree, is refused.
 
 | Argument | Type | Required | Description |
 |----------|------|:---:|-------------|
@@ -673,11 +679,17 @@ the missing step. Writes are also recorded in a bounded in-process history
 variables).
 
 **`get_clipboard`** — read the clipboard. Returns
-`{text, bytes_len, base64, is_utf8, truncated}`; binary content is recoverable
-from `base64`. No arguments.
+`{text, bytes_len, base64, is_utf8, truncated, note}`; binary content is
+recoverable from `base64`. No arguments. On Android 10 and later only the app in
+the foreground (or the keyboard) may read the clipboard: a read while Termux is
+in the background comes back empty, with no error. An empty result therefore
+carries a `note` saying it does not prove the clipboard is empty; bring Termux
+to the foreground and read again to be sure.
 
-**`set_clipboard`** — write the clipboard. Provide exactly one of `text` or
-`text_base64`; providing both or neither is an error.
+**`set_clipboard`** — write the clipboard, replacing its content. Provide
+exactly one of `text` or `text_base64`; providing both or neither is an error.
+Because of the restriction above, the previous content usually cannot be read
+first from the background, so it cannot be restored afterwards.
 
 | Argument | Type | Required | Description |
 |----------|------|:---:|-------------|
@@ -878,7 +890,12 @@ localhost (set `DROIDMCP_SENSORS_KEY` or `DROIDMCP_API_KEY` to require auth).
 Location data is privacy-sensitive: prefer running this server with a key.
 
 Successful calls pass the Termux:API JSON through verbatim; failed calls return
-the full run record (`stdout`, `stderr`, `exit_code`, `timed_out`). Every tool
+the full run record (`stdout`, `stderr`, `exit_code`, `timed_out`). Termux:API
+also reports some failures as JSON with exit status 0 — `{"error": …}` for a
+missing permission, `{"API_ERROR": …}` when `termux-location` gets no fix. Those
+are returned as errors, naming the permission and where to grant it, in every
+server that uses Termux:API (sensors, notifications, contacts, SMS and the
+`termux_*` tools of `mcp-termux`). Every tool
 accepts `timeout_seconds` (default 15s — 30s for `get_location` — max 120s).
 
 **`get_battery`** — battery status via `termux-battery-status`. Returns the
@@ -942,7 +959,9 @@ the notification.
 **`list_notifications`** — active notifications via `termux-notification-list`.
 Returns the API's JSON array (`id`, `tag`, `key`, `group`, `packageName`,
 `title`, `content`, `when`). Requires the **Notification Access** permission to
-be granted to Termux:API in Android settings; without it the list is empty.
+be granted to Termux:API in Android settings. Without it the list is empty or,
+on some devices, `termux-notification-list` never answers; the call then times
+out with an error that says which access to grant.
 
 **`dismiss_notification`** — remove a notification via
 `termux-notification-remove`. Takes a required `id` (one previously passed to
@@ -1358,7 +1377,9 @@ shows the `next_run` (check the time zone), and `task_history` keeps the newest
 | `mcp-sqlite` `query` returns `query only runs read statements` | A write statement was sent to `query`. Use `execute` for `INSERT`/`UPDATE`/`DELETE`/DDL. |
 | `mcp-sensors` `get_brightness` errors with `cannot read screen brightness` | The device restricts the Android settings provider (Termux:API cannot read brightness at all). The other sensor tools are unaffected. |
 | `mcp-sensors` `get_location` times out | A fresh GPS fix needs sky view and can exceed the timeout. Use `request: "last"` for the cached fix, `provider: "network"` for a coarse one, or raise `timeout_seconds`. |
-| `mcp-notifications` `list_notifications` returns an empty array | Termux:API lacks the **Notification Access** permission. Grant it to Termux:API in Android's *Notification access* settings; posting and dismissing still work without it. |
+| `mcp-notifications` `list_notifications` returns an empty array, or times out with `did not answer within …` | Termux:API lacks the **Notification Access** permission. Grant it to Termux:API in Android's *Notification access* settings; posting and dismissing still work without it. |
+| A Termux:API tool fails with `Please grant the following permission to use this command: android.permission.…` | The Termux:API app lacks that permission (SMS, contacts, location, …). Grant it in Android Settings → Apps → Termux:API → Permissions and retry. |
+| `mcp-clipboard` `get_clipboard` returns empty text with a `note` | Android 10+ lets only the foreground app read the clipboard. Bring Termux to the foreground and read again; the clipboard may not really be empty. |
 | `mcp-notifications` `get_dnd_status` errors with `cannot read Do Not Disturb state` | The device restricts the Android settings provider (Termux:API has no DND getter). The other notification tools are unaffected. |
 | `mcp-llm-proxy` exits, logs `cannot use the configured Ollama host` | `DROIDMCP_OLLAMA_HOST` is unparseable, uses a scheme other than http/https, or points outside the device/LAN. Fix the value, or set `DROIDMCP_LLMPROXY_ALLOW_REMOTE=1` if a remote daemon is intended. |
 | `mcp-llm-proxy` tools return `cannot reach ollama at …` | The daemon is not running or listens elsewhere. Start it with `ollama serve`, check `curl http://127.0.0.1:11434/api/tags`, and point `DROIDMCP_OLLAMA_HOST` at it if the port differs. Under proot use `127.0.0.1`, not `localhost`. |

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/kahz12/droidmcp/internal/termuxapi"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -35,6 +36,11 @@ func fetchContacts(ctx context.Context, req mcp.CallToolRequest) ([]contact, *mc
 	if res.ExitCode != 0 || res.TimedOut || res.Cancelled {
 		body, _ := json.Marshal(res)
 		return nil, mcp.NewToolResultError(string(body))
+	}
+	// Without the Contacts permission Termux:API prints an error document and
+	// exits 0; report it rather than a JSON parse error that hides the cause.
+	if msg, failed := termuxapi.Failure(binContactList, res.Stdout); failed {
+		return nil, mcp.NewToolResultError(msg)
 	}
 	contacts, perr := parseContacts(res.Stdout)
 	if perr != nil {

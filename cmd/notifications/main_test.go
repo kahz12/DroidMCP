@@ -343,3 +343,41 @@ func TestSafeUTF8AndCappedBuffer(t *testing.T) {
 		t.Errorf("cap not enforced: %q truncated=%v", cb.Bytes(), cb.truncated)
 	}
 }
+
+// Without Notification Access termux-notification-list neither prints nor
+// exits, so the timeout is all there is; it must say what to grant.
+func TestListNotificationsTimeoutExplainsNotificationAccess(t *testing.T) {
+	dir := fakeBinDir(t)
+	fakeBin(t, dir, binNotifyList, "exec sleep 30")
+	got, isErr := resultText(t, mustCall(t, handleListNotifications, map[string]any{"timeout_seconds": 1.0}))
+	if !isErr {
+		t.Fatalf("a timeout must be an error: %s", got)
+	}
+	for _, want := range []string{"did not answer within 1s", "Notification access", "Termux:API"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("error %q does not mention %q", got, want)
+		}
+	}
+}
+
+func TestNotificationToolsReportTermuxAPIErrors(t *testing.T) {
+	const refused = `{"error":"Please grant the following permission to use this command: android.permission.POST_NOTIFICATIONS"}`
+	for _, tc := range []struct {
+		name, bin string
+		h         func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+		args      map[string]any
+	}{
+		{"list", binNotifyList, handleListNotifications, nil},
+		{"send", binNotify, handleSendNotification, map[string]any{"content": "hola"}},
+		{"dismiss", binNotifyRemove, handleDismissNotification, map[string]any{"id": "7"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := fakeBinDir(t)
+			fakeBin(t, dir, tc.bin, "echo '"+refused+"'")
+			got, isErr := resultText(t, mustCall(t, tc.h, tc.args))
+			if !isErr || !strings.Contains(got, "POST_NOTIFICATIONS") || strings.Contains(got, `"sent":true`) {
+				t.Fatalf("got isErr=%v %q, want the permission error", isErr, got)
+			}
+		})
+	}
+}

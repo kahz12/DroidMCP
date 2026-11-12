@@ -81,8 +81,8 @@ examples, lives in the [usage guide](docs/usage.md).
 | `list_directory` | List directory contents with type and size |
 | `stat` | File metadata: size, mode, times, owner |
 | `search_files` | Recursive file search using glob patterns |
-| `delete_file` | Delete a file or empty directory |
-| `move_file` | Move or rename a file/directory |
+| `delete_file` | Delete a file or empty directory (never the root itself) |
+| `move_file` | Move or rename a file/directory (creates parent dirs) |
 | `copy_file` | Copy a file |
 
 </details>
@@ -163,7 +163,7 @@ Android app; without them the tools fail with a hint explaining which step is mi
 
 | Tool | Description |
 |------|-------------|
-| `get_clipboard` | Read current clipboard content (binary via base64) |
+| `get_clipboard` | Read current clipboard content (binary via base64); Android 10+ only allows it while Termux is in the foreground |
 | `set_clipboard` | Write text or base64-encoded bytes to clipboard |
 | `clear_clipboard` | Reset the clipboard to an empty value |
 | `clipboard_history` | In-memory clipboard history (FIFO-evicted, env-bounded) |
@@ -212,7 +212,9 @@ injection-safe.
 <br>
 
 Requires the `termux-api` package and the Termux:API Android app. All tools are
-read-only; results pass the API's JSON through verbatim. `get_brightness` reads
+read-only; results pass the API's JSON through verbatim, except Termux:API's
+own error reports (a missing permission, no location fix), which come back as
+errors that say what to grant. `get_brightness` reads
 the Android settings provider (Termux:API has no brightness getter) and may be
 unavailable on some devices.
 
@@ -234,7 +236,7 @@ unavailable on some devices.
 Requires the `termux-api` package and the Termux:API Android app. `send` and
 `dismiss` have visible side effects but touch no files; running with a key is
 recommended. `list_notifications` needs Notification Access granted to
-Termux:API. `get_dnd_status` reads the Android settings provider (Termux:API has
+Termux:API; without it the call may time out with an error that says so. `get_dnd_status` reads the Android settings provider (Termux:API has
 no DND getter) and may be unavailable on some devices.
 
 | Tool | Description |
@@ -470,7 +472,7 @@ cmd/<server>/       one main package per server (filesystem, github, scraper,
 internal/           core — shared server (Streamable HTTP · SSE · stdio) ·
                     config · logger · pathsec (root containment) ·
                     phone (SMS recipients) · dnsconf (DNS on Android) ·
-                    buildinfo
+                    termuxapi (Termux:API error reports) · buildinfo
 docs/               usage guide (EN/ES) · security · Termux setup
 scripts/            reproducible ARM64 cross-build
 ```

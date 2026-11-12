@@ -8,14 +8,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kahz12/droidmcp/internal/termuxapi"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // runJSONTool executes a Termux:API command whose stdout is a JSON document and
 // passes that document through verbatim. A failed run (non-zero exit, timeout,
 // cancellation) returns the full sensorResult as an error so stderr reaches the
-// caller; a run whose stdout is not valid JSON is wrapped as {"raw": …} so the
-// tool still returns something inspectable.
+// caller, and so does a Termux:API error document (a missing permission, or
+// termux-location's {"API_ERROR": …}), which the wrappers print with exit 0; a
+// run whose stdout is not valid JSON is wrapped as {"raw": …} so the tool
+// still returns something inspectable.
 func runJSONTool(ctx context.Context, req mcp.CallToolRequest, name string, args []string, defTimeout time.Duration) (*mcp.CallToolResult, error) {
 	if err := ensureBinaries(name); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -27,6 +30,9 @@ func runJSONTool(ctx context.Context, req mcp.CallToolRequest, name string, args
 	if res.ExitCode != 0 || res.TimedOut || res.Cancelled {
 		body, _ := json.Marshal(res)
 		return mcp.NewToolResultError(string(body)), nil
+	}
+	if msg, failed := termuxapi.Failure(name, res.Stdout); failed {
+		return mcp.NewToolResultError(msg), nil
 	}
 	return jsonPassthrough(res.Stdout)
 }
@@ -175,7 +181,9 @@ func handleListSensors(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 			out["hardware_error"] = detail
 		default:
 			s := strings.TrimSpace(res.Stdout)
-			if json.Valid([]byte(s)) {
+			if msg, failed := termuxapi.Failure(binSensor, s); failed {
+				out["hardware_error"] = msg
+			} else if json.Valid([]byte(s)) {
 				out["hardware"] = json.RawMessage(s)
 			} else {
 				out["hardware_error"] = "termux-sensor -l returned non-JSON output"

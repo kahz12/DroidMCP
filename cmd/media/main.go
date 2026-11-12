@@ -68,6 +68,7 @@ func main() {
 
 	server := core.NewDroidServer("mcp-media", buildinfo.Version)
 	server.APIKey = apiKey
+	server.Root = cfg.Root
 	registerTools(server)
 
 	if err := server.Serve(cfg); err != nil {

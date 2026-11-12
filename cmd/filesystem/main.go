@@ -92,6 +92,7 @@ func main() {
 
 	server := core.NewDroidServer("mcp-filesystem", buildinfo.Version)
 	server.APIKey = apiKey
+	server.Root = cfg.Root
 	registerTools(server)
 
 	if err := server.Serve(cfg); err != nil {
@@ -163,7 +164,7 @@ func registerTools(s *core.DroidServer) {
 
 	// move_file: Atomically renames/moves files within the same filesystem.
 	moveFileTool := mcp.NewTool("move_file",
-		mcp.WithDescription("Move or rename a file/directory"),
+		mcp.WithDescription("Move or rename a file/directory (creates parent dirs of the destination)"),
 		mcp.WithString("source", mcp.Required(), mcp.Description("Source path relative to root")),
 		mcp.WithString("destination", mcp.Required(), mcp.Description("Destination path relative to root")),
 	)
@@ -480,7 +481,18 @@ func handleDeleteFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	if isRoot(fullPath) {
+		return mcp.NewToolResultError("refusing to delete the root directory itself; delete the entries inside it instead"), nil
+	}
 	recursive := req.GetBool("recursive", false)
+
+	// Both modes fail on a path that is not there. os.RemoveAll treats a
+	// missing path as success, which would report a deletion that never
+	// happened (a mistyped path, say).
+	info, statErr := os.Lstat(fullPath)
+	if statErr != nil {
+		return mcp.NewToolResultError(statErr.Error()), nil
+	}
 
 	if recursive {
 		if err := os.RemoveAll(fullPath); err != nil {
@@ -489,10 +501,9 @@ func handleDeleteFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		return mcp.NewToolResultText(fmt.Sprintf("Successfully deleted %s (recursive)", path)), nil
 	}
 
-	info, statErr := os.Lstat(fullPath)
 	if err := os.Remove(fullPath); err != nil {
 		// Surface a clearer hint when the user hit a non-empty directory.
-		if statErr == nil && info.IsDir() {
+		if info.IsDir() {
 			return mcp.NewToolResultError(fmt.Sprintf(
 				"%v (pass recursive=true to remove non-empty directories)", err)), nil
 		}
@@ -520,12 +531,40 @@ func handleMoveFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	if isRoot(fullSrc) {
+		return mcp.NewToolResultError("refusing to move the root directory itself"), nil
+	}
 
+	// Check the source before creating anything, so a failed move does not
+	// leave new, empty directories behind.
+	if _, err := os.Lstat(fullSrc); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if fullDst != fullSrc && pathsec.Within(fullSrc, fullDst) {
+		return mcp.NewToolResultError(fmt.Sprintf("cannot move %s into itself (%s)", src, dst)), nil
+	}
+	// Create missing parent directories, as write_file and copy_file do. The
+	// not-yet-created part of the path cannot hold a symlink, and securePath
+	// has already checked the part that exists.
+	if err := os.MkdirAll(filepath.Dir(fullDst), 0755); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	if err := os.Rename(fullSrc, fullDst); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Successfully moved %s to %s", src, dst)), nil
+}
+
+// isRoot reports whether a path securePath returned is DROIDMCP_ROOT itself
+// (e.g. from "." or "a/.."), which delete_file and move_file refuse: removing
+// or renaming the root would leave the server without its sandbox.
+func isRoot(fullPath string) bool {
+	absRoot, err := filepath.Abs(cfg.Root)
+	if err != nil {
+		return false
+	}
+	return filepath.Clean(fullPath) == filepath.Clean(absRoot)
 }
 
 func handleCopyFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

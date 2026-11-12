@@ -454,3 +454,49 @@ func TestDefaultRateLimitsCoverSMSSending(t *testing.T) {
 		}
 	}
 }
+
+// errorDocShim installs a command that prints a Termux:API error document and
+// exits 0, as the real wrappers do when Termux:API refuses.
+func errorDocShim(t *testing.T, name, doc string) {
+	t.Helper()
+	requireSh(t)
+	dir := t.TempDir()
+	script := "#!/bin/sh\ncat > /dev/null\necho '" + doc + "'\n"
+	if err := writeFile(filepath.Join(dir, name), script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+pathEnv())
+}
+
+// termux_sms_send must not look like it sent a message Termux:API refused.
+func TestTermuxAPIHandlersReportErrorDocuments(t *testing.T) {
+	errorDocShim(t, "termux-sms-send", `{"error":"Please grant the following permission to use this command: android.permission.SEND_SMS"}`)
+	text, isErr := resultText(t, must(handleSMSSend(context.Background(), callRequest(map[string]any{"number": "123", "text": "hi"}))))
+	if !isErr || !strings.Contains(text, "SEND_SMS") || !strings.Contains(text, "Termux:API → Permissions") {
+		t.Fatalf("got isErr=%v %q, want the permission error", isErr, text)
+	}
+
+	errorDocShim(t, "termux-location", `{"API_ERROR":"Failed to get location"}`)
+	text, isErr = resultText(t, must(handleLocation(context.Background(), callRequest(nil))))
+	if !isErr || !strings.Contains(text, "termux-location: Failed to get location") {
+		t.Fatalf("got isErr=%v %q, want the API error", isErr, text)
+	}
+}
+
+// run_command runs arbitrary programs, whose output may well be JSON with an
+// "error" field; that is their output, not a Termux:API refusal.
+func TestRunCommandLeavesErrorShapedOutputAlone(t *testing.T) {
+	errorDocShim(t, "printjson", `{"error":"from my own program"}`)
+	t.Setenv(allowlistEnv, "printjson")
+	text, isErr := resultText(t, must(handleRunCommand(context.Background(), callRequest(map[string]any{"command": "printjson"}))))
+	if isErr || !strings.Contains(text, "from my own program") {
+		t.Fatalf("got isErr=%v %q, want the program's output as a success", isErr, text)
+	}
+}
+
+func must(res *mcp.CallToolResult, err error) *mcp.CallToolResult {
+	if err != nil {
+		panic(err)
+	}
+	return res
+}

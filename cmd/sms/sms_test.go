@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -233,4 +234,45 @@ func must(res *mcp.CallToolResult, err error) *mcp.CallToolResult {
 		panic(err)
 	}
 	return res
+}
+
+// permissionDenied is what Termux:API prints, with exit 0, when the app lacks
+// an SMS permission.
+const permissionDenied = `{"error":"Please grant the following permission to use this command: android.permission.READ_SMS"}`
+
+// The wrappers exit 0 even when Termux:API refuses, so the error document must
+// be reported as a failure — never passed through as a result, nor hidden
+// behind a JSON parse error.
+func TestSMSToolsReportTermuxAPIErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		h    func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+		args map[string]any
+	}{
+		{"list_sms", handleListSMS, map[string]any{}},
+		{"search_sms", handleSearchSMS, map[string]any{"query": "code"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeSMSList(t, permissionDenied)
+			got, isErr := resultText(t, mustCall(t, tc.h, tc.args))
+			if !isErr {
+				t.Fatalf("reported success: %s", got)
+			}
+			for _, want := range []string{"termux-sms-list", "READ_SMS", "Termux:API → Permissions"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("error %q does not mention %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+// A refused send must not be reported as sent: the message never left.
+func TestSendSMSReportsTermuxAPIRefusal(t *testing.T) {
+	dir := fakeBinDir(t)
+	fakeBin(t, dir, binSMSSend, `cat > /dev/null; echo '{"error":"Please grant the following permission to use this command: android.permission.SEND_SMS"}'`)
+	got, isErr := resultText(t, mustCall(t, handleSendSMS, map[string]any{"number": "+15551234567", "text": "hola"}))
+	if !isErr || strings.Contains(got, `"sent":true`) || !strings.Contains(got, "SEND_SMS") {
+		t.Fatalf("got isErr=%v %s, want a SEND_SMS permission error", isErr, got)
+	}
 }

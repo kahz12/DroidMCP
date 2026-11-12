@@ -418,6 +418,34 @@ func TestDeleteFileRecursive(t *testing.T) {
 			t.Errorf("tree should be gone, stat err = %v", err)
 		}
 	})
+
+	// os.RemoveAll reports success for a path that is not there; the tool must
+	// not claim it deleted something that never existed.
+	t.Run("missing path is an error in both modes", func(t *testing.T) {
+		for _, recursive := range []bool{false, true} {
+			got, isErr := resultText(t, mustCall(handleDeleteFile, map[string]any{"path": "nope/ghost.txt", "recursive": recursive}))
+			if !isErr || !strings.Contains(got, "no such file") {
+				t.Errorf("recursive=%v: got isErr=%v %q, want a no-such-file error", recursive, isErr, got)
+			}
+		}
+	})
+
+	t.Run("refuses to delete the root itself", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(root, "survivor.txt"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range []string{".", "./", "tree/..", ""} {
+			for _, recursive := range []bool{false, true} {
+				got, isErr := resultText(t, mustCall(handleDeleteFile, map[string]any{"path": p, "recursive": recursive}))
+				if !isErr || !strings.Contains(got, "root directory") {
+					t.Errorf("delete %q recursive=%v: got isErr=%v %q, want a refusal", p, recursive, isErr, got)
+				}
+			}
+		}
+		if _, err := os.Stat(filepath.Join(root, "survivor.txt")); err != nil {
+			t.Fatalf("root content is gone: %v", err)
+		}
+	})
 }
 
 func TestCopyFile(t *testing.T) {
@@ -540,6 +568,37 @@ func TestMoveFile(t *testing.T) {
 		}
 		if entries, _ := os.ReadDir(outside); len(entries) != 0 {
 			t.Fatalf("files appeared outside root: %v", entries)
+		}
+	})
+
+	// Like write_file and copy_file, a move creates the destination's parents.
+	t.Run("creates missing destination directories", func(t *testing.T) {
+		if msg, failed := move("keep.txt", "new/deep/keep.txt"); failed {
+			t.Fatalf("move failed: %s", msg)
+		}
+		if got := content("new/deep/keep.txt"); got != "keep" {
+			t.Fatalf("new/deep/keep.txt = %q", got)
+		}
+	})
+
+	t.Run("a missing source fails and creates nothing", func(t *testing.T) {
+		msg, failed := move("nope.txt", "ghost/dir/x.txt")
+		if !failed || !strings.Contains(msg, "no such file") {
+			t.Fatalf("got failed=%v %q, want a no-such-file error", failed, msg)
+		}
+		if _, err := os.Stat(filepath.Join(root, "ghost")); !os.IsNotExist(err) {
+			t.Fatalf("a failed move left directories behind: %v", err)
+		}
+	})
+
+	t.Run("refuses to move the root itself", func(t *testing.T) {
+		for _, src := range []string{".", "new/.."} {
+			if msg, failed := move(src, "elsewhere"); !failed || !strings.Contains(msg, "root directory") {
+				t.Errorf("move %q: got failed=%v %q, want a refusal", src, failed, msg)
+			}
+		}
+		if got := content("new/deep/keep.txt"); got != "keep" {
+			t.Fatalf("root content changed after a refused move: %q", got)
 		}
 	})
 }

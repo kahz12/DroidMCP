@@ -368,7 +368,9 @@ Operaciones de archivos en sandbox bajo `DROIDMCP_ROOT`. Las rutas se validan en
 cada llamada: se rechazan las rutas absolutas, se rechaza el traversal con `..`, y
 los symlinks se resuelven y re-verifican para que un enlace dentro de la raíz no
 pueda apuntar fuera de ella. Este servidor requiere tanto `DROIDMCP_ROOT` como una
-key, y no tiene modo dev.
+key, y no tiene modo dev. Los mensajes de error nombran las rutas relativas a la
+raíz (`rename a.txt b/c.txt: …`) y nunca revelan dónde está la raíz en el
+dispositivo; `mcp-media` y `mcp-sqlite` hacen lo mismo.
 
 **`read_file`** — lee un archivo, opcionalmente un rango de bytes.
 
@@ -427,7 +429,8 @@ entrada. Devuelve rutas relativas a la raíz de búsqueda, una por línea, o
 | `regex` | string | uno de | — | Expresión regular. Excluyente con `pattern`. |
 | `max_results` | number | no | `0` | Detenerse tras esta cantidad de coincidencias; `0` = sin límite. |
 
-**`delete_file`** — elimina un archivo o directorio.
+**`delete_file`** — elimina un archivo o directorio. Una ruta que no existe es
+un error, con o sin `recursive`, y la raíz misma (`.`) nunca se elimina.
 
 | Argumento | Tipo | Requerido | Por defecto | Descripción |
 |-----------|------|:---:|-------------|-------------|
@@ -435,7 +438,9 @@ entrada. Devuelve rutas relativas a la raíz de búsqueda, una por línea, o
 | `recursive` | boolean | no | `false` | Elimina directorios no vacíos recursivamente. Sin él, un directorio no vacío da error con una pista. |
 
 **`move_file`** — mueve o renombra. Respaldado por `os.Rename`, así que origen y
-destino deben estar en el mismo sistema de archivos.
+destino deben estar en el mismo sistema de archivos. Crea los directorios padre
+que falten en el destino, como `write_file` y `copy_file`; mover la raíz misma,
+o un directorio dentro de su propio subárbol, se rechaza.
 
 | Argumento | Tipo | Requerido | Descripción |
 |-----------|------|:---:|-------------|
@@ -690,11 +695,18 @@ acotado en el proceso (por defecto 32 entradas / 64 KiB, configurable con las do
 variables `..._HISTORY_...`).
 
 **`get_clipboard`** — lee el portapapeles. Devuelve
-`{text, bytes_len, base64, is_utf8, truncated}`; el contenido binario es
-recuperable desde `base64`. Sin argumentos.
+`{text, bytes_len, base64, is_utf8, truncated, note}`; el contenido binario es
+recuperable desde `base64`. Sin argumentos. Desde Android 10 solo la app en
+primer plano (o el teclado) puede leer el portapapeles: una lectura con Termux en
+segundo plano vuelve vacía, sin error. Por eso un resultado vacío trae un `note`
+que avisa de que no prueba que el portapapeles esté vacío; pon Termux en primer
+plano y vuelve a leer para confirmarlo.
 
-**`set_clipboard`** — escribe el portapapeles. Proporciona exactamente uno de
-`text` o `text_base64`; proporcionar ambos o ninguno es un error.
+**`set_clipboard`** — escribe el portapapeles y reemplaza su contenido.
+Proporciona exactamente uno de `text` o `text_base64`; proporcionar ambos o
+ninguno es un error. Por la restricción anterior, el contenido previo
+normalmente no se puede leer antes desde segundo plano, así que no se puede
+restaurar después.
 
 | Argumento | Tipo | Requerido | Descripción |
 |-----------|------|:---:|-------------|
@@ -902,7 +914,12 @@ La ubicación es un dato sensible: es preferible correr este servidor con key.
 
 Las llamadas exitosas pasan el JSON de Termux:API tal cual; las fallidas
 devuelven el registro completo de la ejecución (`stdout`, `stderr`,
-`exit_code`, `timed_out`). Todas las tools aceptan `timeout_seconds` (por
+`exit_code`, `timed_out`). Termux:API también informa algunos fallos como JSON
+con código de salida 0 — `{"error": …}` cuando falta un permiso,
+`{"API_ERROR": …}` cuando `termux-location` no obtiene ubicación. Esos se
+devuelven como error, nombrando el permiso y dónde concederlo, en todos los
+servidores que usan Termux:API (sensors, notifications, contacts, SMS y las
+tools `termux_*` de `mcp-termux`). Todas las tools aceptan `timeout_seconds` (por
 defecto 15 s — 30 s en `get_location` — máx 120 s).
 
 **`get_battery`** — estado de la batería vía `termux-battery-status`. Devuelve
@@ -970,8 +987,10 @@ actualizar o luego descartar la notificación.
 **`list_notifications`** — notificaciones activas vía `termux-notification-list`.
 Devuelve el array JSON de la API (`id`, `tag`, `key`, `group`, `packageName`,
 `title`, `content`, `when`). Requiere que el permiso de **Acceso a
-Notificaciones** esté concedido a Termux:API en los ajustes de Android; sin él la
-lista sale vacía.
+Notificaciones** esté concedido a Termux:API en los ajustes de Android. Sin él la
+lista sale vacía o, en algunos dispositivos, `termux-notification-list` nunca
+responde; entonces la llamada agota el tiempo con un error que dice qué acceso
+conceder.
 
 **`dismiss_notification`** — elimina una notificación vía
 `termux-notification-remove`. Toma un `id` requerido (uno pasado antes a
@@ -1409,7 +1428,9 @@ ejecuciones más recientes con su salida.
 | `mcp-sqlite` `query` devuelve `query only runs read statements` | Se envió una sentencia de escritura a `query`. Usa `execute` para `INSERT`/`UPDATE`/`DELETE`/DDL. |
 | `mcp-sensors` `get_brightness` falla con `cannot read screen brightness` | El dispositivo restringe el proveedor de ajustes de Android (Termux:API no puede leer el brillo en absoluto). Las demás tools de sensores no se ven afectadas. |
 | `mcp-sensors` `get_location` agota el timeout | Un fix GPS fresco necesita vista al cielo y puede exceder el timeout. Usa `request: "last"` para el fix cacheado, `provider: "network"` para uno aproximado, o sube `timeout_seconds`. |
-| `mcp-notifications` `list_notifications` devuelve un array vacío | Termux:API no tiene el permiso de **Acceso a Notificaciones**. Concédelo a Termux:API en los ajustes de *Acceso a notificaciones* de Android; publicar y descartar siguen funcionando sin él. |
+| `mcp-notifications` `list_notifications` devuelve un array vacío, o agota el tiempo con `did not answer within …` | Termux:API no tiene el permiso de **Acceso a Notificaciones**. Concédelo a Termux:API en los ajustes de *Acceso a notificaciones* de Android; publicar y descartar siguen funcionando sin él. |
+| Una tool de Termux:API falla con `Please grant the following permission to use this command: android.permission.…` | La app Termux:API no tiene ese permiso (SMS, contactos, ubicación…). Concédelo en Ajustes de Android → Aplicaciones → Termux:API → Permisos y reintenta. |
+| `mcp-clipboard` `get_clipboard` devuelve texto vacío con un `note` | Desde Android 10 solo la app en primer plano puede leer el portapapeles. Pon Termux en primer plano y vuelve a leer; puede que el portapapeles no esté vacío. |
 | `mcp-notifications` `get_dnd_status` falla con `cannot read Do Not Disturb state` | El dispositivo restringe el proveedor de ajustes de Android (Termux:API no tiene getter de No molestar). Las demás tools de notificaciones no se ven afectadas. |
 | `mcp-llm-proxy` sale al arrancar y loguea `cannot use the configured Ollama host` | `DROIDMCP_OLLAMA_HOST` no se puede parsear, usa un esquema distinto de http/https, o apunta fuera del dispositivo/LAN. Corrige el valor, o pon `DROIDMCP_LLMPROXY_ALLOW_REMOTE=1` si el demonio remoto es intencionado. |
 | Las tools de `mcp-llm-proxy` devuelven `cannot reach ollama at …` | El demonio no está corriendo o escucha en otro sitio. Arráncalo con `ollama serve`, comprueba `curl http://127.0.0.1:11434/api/tags` y apunta `DROIDMCP_OLLAMA_HOST` ahí si el puerto cambia. Bajo proot usa `127.0.0.1`, no `localhost`. |

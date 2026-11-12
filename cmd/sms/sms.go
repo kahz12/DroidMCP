@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kahz12/droidmcp/internal/phone"
+	"github.com/kahz12/droidmcp/internal/termuxapi"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -49,6 +50,9 @@ func handleListSMS(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 		body, _ := json.Marshal(res)
 		return mcp.NewToolResultError(string(body)), nil
 	}
+	if msg, failed := termuxapi.Failure(binSMSList, res.Stdout); failed {
+		return mcp.NewToolResultError(msg), nil
+	}
 	return jsonPassthrough(res.Stdout)
 }
 
@@ -82,6 +86,9 @@ func handleSearchSMS(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 	if res.ExitCode != 0 || res.TimedOut || res.Cancelled {
 		body, _ := json.Marshal(res)
 		return mcp.NewToolResultError(string(body)), nil
+	}
+	if msg, failed := termuxapi.Failure(binSMSList, res.Stdout); failed {
+		return mcp.NewToolResultError(msg), nil
 	}
 	msgs, perr := parseMessages(res.Stdout)
 	if perr != nil {
@@ -139,7 +146,12 @@ func handleSendSMS(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 		errBody, _ := json.Marshal(res)
 		return mcp.NewToolResultError(string(errBody)), nil
 	}
-	// termux-sms-send prints nothing on success; exit 0 is the signal.
+	// termux-sms-send prints nothing on success, but it also exits 0 when
+	// Termux:API refuses (no SEND_SMS permission), printing an error document
+	// instead: reporting that as sent would claim a message that never left.
+	if msg, failed := termuxapi.Failure(binSMSSend, res.Stdout); failed {
+		return mcp.NewToolResultError(msg), nil
+	}
 	return jsonResult(sendResult{Sent: true, Recipients: nums, SimSlot: slotPtr})
 }
 

@@ -41,11 +41,11 @@ func main() {
 
 func registerTools(s *core.DroidServer) {
 	s.MCPServer.AddTool(mcp.NewTool("get_clipboard",
-		mcp.WithDescription("Read clipboard. Returns JSON {text, bytes_len, base64, is_utf8, truncated}. Binary content is recoverable from base64."),
+		mcp.WithDescription("Read clipboard. Returns JSON {text, bytes_len, base64, is_utf8, truncated, note}. Binary content is recoverable from base64. On Android 10+ only the foreground app can read the clipboard, so an empty result read from the background does not prove the clipboard is empty; `note` says so whenever the result is empty."),
 	), handleGetClipboard)
 
 	s.MCPServer.AddTool(mcp.NewTool("set_clipboard",
-		mcp.WithDescription("Write to clipboard. Provide exactly one of `text` (UTF-8) or `text_base64` (decoded as binary)."),
+		mcp.WithDescription("Write to clipboard, replacing what it holds. Provide exactly one of `text` (UTF-8) or `text_base64` (decoded as binary). On Android 10+ the previous content usually cannot be read back from the background first, so it cannot be restored afterwards."),
 		mcp.WithString("text", mcp.Description("UTF-8 text to write")),
 		mcp.WithString("text_base64", mcp.Description("Base64-encoded bytes to write (use for non-UTF-8 / binary content)")),
 	), handleSetClipboard)
@@ -68,7 +68,15 @@ type getClipboardResult struct {
 	Base64    string `json:"base64,omitempty"`
 	IsUTF8    bool   `json:"is_utf8"`
 	Truncated bool   `json:"truncated,omitempty"`
+	Note      string `json:"note,omitempty"`
 }
+
+// emptyClipboardNote accompanies every empty read. Android 10+ hands the
+// clipboard only to the foreground app or the default keyboard; a background
+// read gets nothing and no error, so "empty" and "not allowed" look the same.
+// A caller that took it for an empty clipboard could overwrite content it
+// believed it had saved.
+const emptyClipboardNote = "the read came back empty, which does not prove the clipboard is empty: Android 10 and later only let the foreground app (or the keyboard) read it, so a read from the background returns nothing. Bring Termux to the foreground and read again to be sure"
 
 func handleGetClipboard(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if err := ensureBinaries(binClipboardGet); err != nil {
@@ -92,6 +100,9 @@ func handleGetClipboard(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallTo
 		out.Text = string(res.RawStdout)
 	} else {
 		out.Text = res.Stdout
+	}
+	if out.BytesLen == 0 {
+		out.Note = emptyClipboardNote
 	}
 	return jsonResult(out)
 }

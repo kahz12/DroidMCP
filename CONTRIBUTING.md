@@ -64,6 +64,7 @@ internal/logger   structured logging with secret redaction
 internal/pathsec  containment of caller paths in DROIDMCP_ROOT
 internal/phone    SMS recipient validation (mcp-sms, mcp-termux)
 internal/dnsconf  DNS via Termux's resolv.conf where Android has none
+internal/termuxapi  Termux:API error documents (printed with exit 0) as tool errors
 internal/buildinfo  version stamped at build time
 ```
 

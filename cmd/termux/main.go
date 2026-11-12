@@ -18,6 +18,7 @@ import (
 	"github.com/kahz12/droidmcp/internal/core"
 	"github.com/kahz12/droidmcp/internal/logger"
 	"github.com/kahz12/droidmcp/internal/phone"
+	"github.com/kahz12/droidmcp/internal/termuxapi"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -226,7 +227,7 @@ func handleReadEnv(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRes
 }
 
 func handleBatteryStatus(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return runAndRender(ctx, execOptions{
+	return runAPIAndRender(ctx, execOptions{
 		Command: "termux-battery-status",
 		Timeout: timeoutFromReq(req),
 		Trusted: true,
@@ -241,7 +242,7 @@ func handleLocation(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	if r := req.GetString("request", ""); r != "" {
 		args = append(args, "-r", r)
 	}
-	return runAndRender(ctx, execOptions{
+	return runAPIAndRender(ctx, execOptions{
 		Command: "termux-location",
 		Args:    args,
 		Timeout: timeoutFromReq(req),
@@ -260,7 +261,7 @@ func handleNotification(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 	if id := req.GetString("id", ""); id != "" {
 		args = append(args, "--id", id)
 	}
-	return runAndRender(ctx, execOptions{
+	return runAPIAndRender(ctx, execOptions{
 		Command: "termux-notification",
 		Args:    args,
 		Trusted: true,
@@ -272,7 +273,7 @@ func handleToast(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolRes
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	return runAndRender(ctx, execOptions{
+	return runAPIAndRender(ctx, execOptions{
 		Command: "termux-toast",
 		Stdin:   text,
 		Trusted: true,
@@ -298,7 +299,7 @@ func handleSMSSend(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 	// Same contract as mcp-sms: the recipients are validated phone numbers in
 	// one argv element, and the body goes on stdin, so it never reaches the
 	// command line where it could be parsed as an option.
-	return runAndRender(ctx, execOptions{
+	return runAPIAndRender(ctx, execOptions{
 		Command: "termux-sms-send",
 		Args:    []string{"-n", recipients},
 		Stdin:   text,
@@ -321,7 +322,7 @@ func handleTTSSpeak(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	if p := req.GetFloat("pitch", 0); p > 0 {
 		args = append(args, "-p", formatFloat(p))
 	}
-	return runAndRender(ctx, execOptions{
+	return runAPIAndRender(ctx, execOptions{
 		Command: "termux-tts-speak",
 		Args:    args,
 		Stdin:   text,
@@ -336,6 +337,31 @@ func runAndRender(ctx context.Context, opts execOptions) (*mcp.CallToolResult, e
 	res, err := runCommand(ctx, opts)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
+	}
+	body, mErr := json.Marshal(res)
+	if mErr != nil {
+		return mcp.NewToolResultError(mErr.Error()), nil
+	}
+	if res.ExitCode != 0 || res.TimedOut || res.Cancelled {
+		return mcp.NewToolResultError(string(body)), nil
+	}
+	return mcp.NewToolResultText(string(body)), nil
+}
+
+// runAPIAndRender is runAndRender for the fixed termux-* wrappers. Termux:API
+// reports a refusal (a missing permission, a failed endpoint) as an error
+// document on stdout with exit 0, so a run that printed one is an error too —
+// otherwise termux_sms_send would look like it sent a message that never left.
+// run_command does not use it: arbitrary programs may print such JSON.
+func runAPIAndRender(ctx context.Context, opts execOptions) (*mcp.CallToolResult, error) {
+	res, err := runCommand(ctx, opts)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if res.ExitCode == 0 && !res.TimedOut && !res.Cancelled {
+		if msg, failed := termuxapi.Failure(opts.Command, res.Stdout); failed {
+			return mcp.NewToolResultError(msg), nil
+		}
 	}
 	body, mErr := json.Marshal(res)
 	if mErr != nil {

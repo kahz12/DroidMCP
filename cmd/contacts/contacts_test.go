@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // sampleContacts is a small address book the fake termux-contact-list emits.
@@ -245,6 +248,27 @@ func TestNormalizeNumber(t *testing.T) {
 	for in, want := range cases {
 		if got := normalizeNumber(in); got != want {
 			t.Errorf("normalizeNumber(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Without the Contacts permission Termux:API prints an error document and
+// exits 0. Every tool must report that, not a JSON parse error.
+func TestContactToolsReportTermuxAPIErrors(t *testing.T) {
+	fakeContactList(t, `{"error":"Please grant the following permission to use this command: android.permission.READ_CONTACTS"}`)
+	for name, call := range map[string]map[string]any{
+		"search_contacts": {"query": "a"},
+		"get_contact":     {"name": "Ana"},
+		"export_contacts": {"format": "vcard"},
+	} {
+		h := map[string]func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error){
+			"search_contacts": handleSearchContacts,
+			"get_contact":     handleGetContact,
+			"export_contacts": handleExportContacts,
+		}[name]
+		got, isErr := resultText(t, mustCall(t, h, call))
+		if !isErr || !strings.Contains(got, "READ_CONTACTS") || strings.Contains(got, "could not parse") {
+			t.Errorf("%s: got isErr=%v %q, want the permission error", name, isErr, got)
 		}
 	}
 }

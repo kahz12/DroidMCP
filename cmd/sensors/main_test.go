@@ -343,3 +343,45 @@ func TestSafeUTF8AndCappedBuffer(t *testing.T) {
 		t.Errorf("cap not enforced: %q truncated=%v", cb.Bytes(), cb.truncated)
 	}
 }
+
+// Termux:API prints its failures as JSON with exit 0 — {"API_ERROR": …} from
+// termux-location, {"error": …} for a missing permission. They are errors, not
+// readings to pass through.
+func TestSensorToolsReportTermuxAPIErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name, bin, stdout, want string
+		h                       func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+		args                    map[string]any
+	}{
+		{"location API_ERROR", binLocation, `{"API_ERROR":"Failed to get location"}`, "termux-location: Failed to get location", handleGetLocation, map[string]any{"request": "last"}},
+		{"wifi permission", binWifiInfo, `{"error":"Please grant the following permission to use this command: android.permission.ACCESS_FINE_LOCATION"}`, "Termux:API → Permissions", handleGetWifiInfo, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := fakeBinDir(t)
+			fakeBin(t, dir, tc.bin, "echo '"+tc.stdout+"'")
+			got, isErr := resultText(t, mustCall(t, tc.h, tc.args))
+			if !isErr || !strings.Contains(got, tc.want) {
+				t.Fatalf("got isErr=%v %q, want an error containing %q", isErr, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestListSensorsReportsTermuxAPIError(t *testing.T) {
+	dir := fakeBinDir(t)
+	fakeBin(t, dir, binSensor, `echo '{"error":"Please grant the following permission to use this command: android.permission.BODY_SENSORS"}'`)
+	got, isErr := resultText(t, mustCall(t, handleListSensors, nil))
+	if isErr {
+		t.Fatalf("list_sensors should still report tool availability: %s", got)
+	}
+	var out struct {
+		Hardware      json.RawMessage `json:"hardware"`
+		HardwareError string          `json:"hardware_error"`
+	}
+	if err := json.Unmarshal([]byte(got), &out); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, got)
+	}
+	if out.Hardware != nil || !strings.Contains(out.HardwareError, "BODY_SENSORS") {
+		t.Errorf("the error document must land in hardware_error, not hardware: %s", got)
+	}
+}

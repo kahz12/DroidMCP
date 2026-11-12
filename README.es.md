@@ -81,8 +81,8 @@ tool, con argumentos y ejemplos, está en la [guía de uso](docs/usage.es.md).
 | `list_directory` | Lista el contenido de un directorio con tipo y tamaño |
 | `stat` | Metadatos de archivo: tamaño, modo, fechas, propietario |
 | `search_files` | Búsqueda recursiva de archivos con patrones glob |
-| `delete_file` | Elimina un archivo o directorio vacío |
-| `move_file` | Mueve o renombra un archivo/directorio |
+| `delete_file` | Elimina un archivo o directorio vacío (nunca la raíz misma) |
+| `move_file` | Mueve o renombra un archivo/directorio (crea los directorios padre) |
 | `copy_file` | Copia un archivo |
 
 </details>
@@ -164,7 +164,7 @@ fallan con un mensaje que indica qué paso falta.
 
 | Tool | Descripción |
 |------|-------------|
-| `get_clipboard` | Lee el contenido actual del portapapeles (binario vía base64) |
+| `get_clipboard` | Lee el contenido actual del portapapeles (binario vía base64); desde Android 10 solo funciona con Termux en primer plano |
 | `set_clipboard` | Escribe texto o bytes codificados en base64 al portapapeles |
 | `clear_clipboard` | Restablece el portapapeles a un valor vacío |
 | `clipboard_history` | Historial en memoria (expulsión FIFO, acotado por variables) |
@@ -213,7 +213,9 @@ Basado en `modernc.org/sqlite`; las bases de datos son archivos bajo
 <br>
 
 Requiere el paquete `termux-api` y la app Android Termux:API. Todas las tools son
-de solo lectura; los resultados pasan el JSON de la API tal cual.
+de solo lectura; los resultados pasan el JSON de la API tal cual, salvo los
+informes de error de Termux:API (un permiso que falta, ninguna ubicación), que
+vuelven como errores que dicen qué conceder.
 `get_brightness` lee el proveedor de ajustes de Android (Termux:API no tiene
 getter de brillo) y puede no estar disponible en algunos dispositivos.
 
@@ -235,7 +237,7 @@ getter de brillo) y puede no estar disponible en algunos dispositivos.
 Requiere el paquete `termux-api` y la app Android Termux:API. `send` y `dismiss`
 tienen efectos visibles pero no tocan archivos; se recomienda ejecutar con key.
 `list_notifications` necesita el permiso de Acceso a Notificaciones concedido a
-Termux:API. `get_dnd_status` lee el proveedor de ajustes de Android (Termux:API
+Termux:API; sin él la llamada puede agotar el tiempo con un error que lo indica. `get_dnd_status` lee el proveedor de ajustes de Android (Termux:API
 no tiene getter de No molestar) y puede no estar disponible en algunos
 dispositivos.
 
@@ -476,7 +478,7 @@ cmd/<servidor>/     un paquete main por servidor (filesystem, github, scraper,
 internal/           core — servidor compartido (Streamable HTTP · SSE · stdio) ·
                     config · logger · pathsec (confinamiento en la raíz) ·
                     phone (destinatarios de SMS) · dnsconf (DNS en Android) ·
-                    buildinfo
+                    termuxapi (errores de Termux:API) · buildinfo
 docs/               guía de uso (EN/ES) · seguridad · puesta a punto de Termux
 scripts/            compilación cruzada ARM64 reproducible
 ```

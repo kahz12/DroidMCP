@@ -57,6 +57,7 @@ DroidMCP/
 │   ├── pathsec/          containment of paths in DROIDMCP_ROOT
 │   ├── phone/            SMS recipient validation
 │   ├── dnsconf/          DNS via Termux's resolv.conf where Android has none
+│   ├── termuxapi/        Termux:API error documents reported as tool errors
 │   └── buildinfo/        version stamped at build time
 ├── scripts/
 │   └── build-arm64.sh
