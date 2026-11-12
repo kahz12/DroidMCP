@@ -47,6 +47,20 @@ hands on an Android device. No Node.js, no Python, no runtime to install.
        └──────────────────────────────────────┘
 ```
 
+## See it running
+
+Screenshots from an Android 15 phone in Termux, only cropped: the
+android/arm64 release binaries of v0.4.1 answering an MCP client over
+Streamable HTTP. On the left, tool calls to six servers. On the right, what
+they refuse: unsafe configurations at startup and, at call time, a wrong key,
+path traversal, a command outside the allowlist, `LD_PRELOAD`, SSRF to
+loopback, SQL `ATTACH` and a permission Termux:API was not granted.
+
+<p align="center">
+  <img src="docs/images/demo-tools.png" width="400" align="top" alt="Termux on Android: seven DroidMCP servers report ok on their health checks, then an MCP client calls get_battery, run_command (uname), extract_metadata on example.com, a file write and read, a SQLite query and an ffmpeg image conversion, all succeeding">
+  <img src="docs/images/demo-security.png" width="400" align="top" alt="Termux on Android: mcp-sms without a key, mcp-termux without an allowlist and mcp-filesystem with DROIDMCP_ROOT=/ refuse to start; a wrong API key, path traversal, an unlisted command, LD_PRELOAD, a loopback fetch, SQL ATTACH and list_sms without the READ_SMS permission are each refused with a clear error">
+</p>
+
 ## Servers
 
 | Server | Default port | Focus | Requires |
