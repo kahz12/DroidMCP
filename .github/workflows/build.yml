@@ -15,6 +15,12 @@ permissions:
 # the release job holds contents:write and the OIDC token used for signing.
 # Dependabot (.github/dependabot.yml) proposes the updates. Tool versions are
 # pinned too, so a new linter release cannot fail CI on unchanged code.
+#
+# Every job installs the Go named by the `go` line of go.mod. A range such as
+# '1.26' lets setup-go settle for an older 1.26.x already cached on the
+# runner, which then refuses to load a module that asks for a newer patch
+# (GOTOOLCHAIN=local) — and would build releases on an unpatched standard
+# library even when it loads.
 
 jobs:
   test:
@@ -27,7 +33,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version-file: go.mod
           cache: true
 
       - name: gofmt
@@ -67,7 +73,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version-file: go.mod
           cache: true
 
       - name: golangci-lint
@@ -86,7 +92,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version-file: go.mod
           cache: true
 
       # gosec runs on the job's Go rather than through securego/gosec's Docker
@@ -108,7 +114,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version-file: go.mod
           cache: true
 
       # Fails only on vulnerabilities in code the servers actually call,
@@ -131,7 +137,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version-file: go.mod
           cache: true
 
       # GOOS=android, not linux: Android's seccomp filter kills an app that
