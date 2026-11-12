@@ -3,6 +3,71 @@
 Notable changes to DroidMCP. Versions follow the git tags; each tagged release
 ships one ARM64 binary per server plus a cosign-signed `SHA256SUMS`.
 
+## [0.4.1] — 2026-11-11
+
+Security and correctness fixes found by govulncheck and by running every
+server on a real device (Android 15, Termux) with an MCP client.
+
+### Security
+
+- Go 1.26.11 and `golang.org/x/net` v0.62.0. govulncheck reported 12
+  vulnerabilities reachable from the servers: eleven in the standard library
+  of Go 1.26.8 (`net/http`, `net/textproto`, `crypto/tls`, `crypto/x509`) and
+  GO-2026-6860 in `x/net`. Dependabot did not propose `x/net` because it is an
+  indirect dependency.
+- Error messages from `mcp-filesystem`, `mcp-media` and `mcp-sqlite` name
+  paths relative to `DROIDMCP_ROOT`. They used to carry the absolute path,
+  disclosing where the root lives on the device (OS errors and ffmpeg's
+  stderr alike).
+- `delete_file` refuses the root itself: `path: "."` with `recursive: true`
+  removed the whole root, leaving the server without its sandbox.
+  `move_file` refuses to move the root too.
+
+### Fixed
+
+- **Termux:API refusals were reported as successes.** Termux:API prints a
+  missing permission (`{"error": …}`) or a failed endpoint (`{"API_ERROR": …}`)
+  as JSON with exit status 0, so:
+  - `send_sms`, `termux_sms_send` and `send_notification` reported a message
+    as sent when Termux:API had refused it;
+  - `list_sms`, `get_location` and the other sensor tools returned the error
+    document as a result;
+  - `search_sms` and the contacts tools failed with a JSON parse error that
+    hid the cause.
+
+  Every Termux:API tool now fails with the API's message and, for a
+  permission, where to grant it (`internal/termuxapi`). `run_command` is
+  unchanged: arbitrary programs may print such JSON.
+- `list_notifications` without Notification Access timed out with no
+  explanation; the error now says which access to grant.
+- `get_clipboard`: Android 10+ hands an empty clipboard to a background
+  reader, with no error. An empty read now carries a `note` saying it does not
+  prove the clipboard is empty, and `set_clipboard` documents that the previous
+  content usually cannot be restored.
+- `delete_file` with `recursive: true` reported a path that does not exist as
+  deleted.
+- `move_file` failed when the destination's directory did not exist; it now
+  creates it, as `write_file` and `copy_file` do. Moving a directory into its
+  own subtree is refused before anything is created.
+
+### Changed
+
+- Releases sign `SHA256SUMS` with a Sigstore bundle,
+  `SHA256SUMS.sigstore.json`, instead of `SHA256SUMS.sig` and
+  `SHA256SUMS.pem`. The release job uses cosign v3 (cosign-installer v4), which
+  refuses the old two-file output; see
+  [Verifying a release](docs/security.md#verifying-a-release).
+- The READMEs show screenshots of the servers running on a real device.
+
+### Upgrading
+
+- **Verifying a release** now takes `--bundle SHA256SUMS.sigstore.json`; the
+  two-file command still works for v0.4.0 and earlier.
+- **Building from source needs Go 1.26.11 or later.** Termux ships 1.27.3; run
+  `pkg upgrade golang` if yours is older.
+- Clients that read a Termux:API error document out of a successful result
+  now get an error result with the same message instead.
+
 ## [0.4.0] — 2026-10-20
 
 ### Added
@@ -144,4 +209,5 @@ ships one ARM64 binary per server plus a cosign-signed `SHA256SUMS`.
 [v0.1.0](https://github.com/kahz12/DroidMCP/releases/tag/v0.1.0) are described
 on their GitHub release pages.
 
+[0.4.1]: https://github.com/kahz12/DroidMCP/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/kahz12/DroidMCP/compare/v0.3.0...v0.4.0

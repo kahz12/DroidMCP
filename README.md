@@ -388,7 +388,7 @@ DROIDMCP_PORT=3000 droidmcp-filesystem
 
 ```bash
 curl -fsS http://localhost:3000/healthz
-# {"status":"ok","server":"mcp-filesystem","version":"v0.4.0"}
+# {"status":"ok","server":"mcp-filesystem","version":"v0.4.1"}
 ```
 
 ## Configuration

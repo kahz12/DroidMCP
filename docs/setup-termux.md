@@ -110,7 +110,7 @@ Verify it is alive from another shell:
 
 ```bash
 curl -fsS http://localhost:3000/healthz
-# {"status":"ok","server":"mcp-filesystem","version":"v0.4.0"}
+# {"status":"ok","server":"mcp-filesystem","version":"v0.4.1"}
 ```
 
 (Health probes bypass auth by design — see [`security.md`](security.md).)

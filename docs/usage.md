@@ -62,7 +62,7 @@ being optional. See [`security.md`](security.md).
 a supervisor can probe it without holding the key:
 
 ```json
-{"status":"ok","server":"mcp-filesystem","version":"v0.4.0"}
+{"status":"ok","server":"mcp-filesystem","version":"v0.4.1"}
 ```
 
 `version` is the git tag for a release, the `git describe` of the checkout for
@@ -148,7 +148,7 @@ Confirm it is alive from a second shell:
 
 ```bash
 curl -fsS http://localhost:3000/healthz
-# {"status":"ok","server":"mcp-filesystem","version":"v0.4.0"}
+# {"status":"ok","server":"mcp-filesystem","version":"v0.4.1"}
 ```
 
 Then point an MCP client at `http://localhost:3000/mcp` with the key in the

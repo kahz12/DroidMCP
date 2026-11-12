@@ -66,7 +66,7 @@ ese momento la autenticación y el TLS dejan de ser opcionales. Ver
 autenticación, para que un supervisor pueda sondearlo sin conocer la key:
 
 ```json
-{"status":"ok","server":"mcp-filesystem","version":"v0.4.0"}
+{"status":"ok","server":"mcp-filesystem","version":"v0.4.1"}
 ```
 
 `version` es el tag de git en un release, el `git describe` del checkout con
@@ -154,7 +154,7 @@ Confirma que está vivo desde una segunda shell:
 
 ```bash
 curl -fsS http://localhost:3000/healthz
-# {"status":"ok","server":"mcp-filesystem","version":"v0.4.0"}
+# {"status":"ok","server":"mcp-filesystem","version":"v0.4.1"}
 ```
 
 Luego apunta un cliente MCP a `http://localhost:3000/mcp` con la key en la
